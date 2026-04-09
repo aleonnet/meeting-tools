@@ -1,0 +1,9 @@
+{
+  "id": "meeting-tools",
+  "name": "Meeting Tools",
+  "version": "2.0.0",
+  "minAppVersion": "1.12.7",
+  "description": "Complete meeting workflow: audio recording, transcription (Whisper), AI summarization, mindmap, task extraction, project creation, Kanban board, Gantt timeline, and task dashboards.",
+  "author": "Alessandro Barbosa",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,496 @@
+/* --- File Explorer Icons --- */
+.mt-file-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  color: var(--text-accent);
+}
+
+.mt-file-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* --- Insert Banner --- */
+.mt-insert-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--interactive-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  z-index: 100;
+  border-radius: 0 0 8px 8px;
+}
+
+.mt-insert-banner-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.mt-insert-cancel {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.5);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mt-insert-confirm {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: none;
+  background: #fff;
+  color: var(--interactive-accent);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.mt-insert-cancel:hover { opacity: 0.8; }
+.mt-insert-confirm:hover { opacity: 0.9; }
+
+/* --- Recording Banner --- */
+.mt-record-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--text-error);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  z-index: 100;
+  border-radius: 0 0 8px 8px;
+}
+
+.mt-record-timer {
+  font-family: var(--font-monospace);
+}
+
+.mt-record-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.mt-record-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.5);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mt-record-btn:hover { opacity: 0.8; }
+
+.mt-record-btn-stop {
+  background: #fff;
+  color: var(--text-error);
+  border: none;
+  font-weight: 600;
+}
+
+.mt-record-btn-cancel {
+  opacity: 0.7;
+}
+
+/* --- Meeting History --- */
+.mt-history-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.mt-history-list {
+  padding-left: 20px;
+}
+
+.mt-history-list li {
+  margin: 2px 0;
+}
+
+.mt-history-list .internal-link {
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mt-history-list .internal-link:hover {
+  text-decoration: underline;
+}
+
+.mt-history-date {
+  font-weight: 600;
+}
+
+.mt-history-blocks {
+  padding-left: 16px;
+  margin: 2px 0 6px;
+}
+
+.mt-history-block {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 1px 0;
+}
+
+/* Modal frame — aplicado ao .modal (modalEl), não ao .modal-content */
+.meeting-tools-modal {
+  width: 700px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Content area — flex column, sem scroll próprio */
+.meeting-tools-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px;
+}
+
+/* Preview renderizado */
+.meeting-tools-preview {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px;
+  margin: 8px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  min-height: 100px;
+}
+
+/* Textarea editável */
+.meeting-tools-textarea {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  margin: 8px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  resize: none;
+  overflow-y: auto;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* Barra de botões — sempre visível no bottom */
+.meeting-tools-btn-row {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.meeting-tools-btn-row button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* --- Task Dashboard --- */
+.mt-dashboard {
+  padding: 4px 0;
+}
+
+.mt-dash-group {
+  margin: 16px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-accent);
+}
+
+.mt-dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.mt-dash-table th {
+  text-align: left;
+  padding: 4px 8px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mt-dash-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.mt-dash-status {
+  width: 32px;
+  text-align: center;
+}
+
+.mt-dash-checkbox {
+  cursor: pointer;
+  font-size: 16px;
+  user-select: none;
+}
+
+.mt-dash-checkbox:hover {
+  opacity: 0.7;
+}
+
+.mt-dash-text {
+  max-width: 400px;
+}
+
+.mt-dash-overdue {
+  color: var(--text-error);
+  font-weight: 600;
+}
+
+.mt-dash-today {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.mt-dash-note .internal-link {
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mt-dash-note .internal-link:hover {
+  text-decoration: underline;
+}
+
+.mt-dash-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mt-dash-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 8px;
+}
+
+.mt-dash-legend-hint {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.mt-dash-export-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--interactive-accent);
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.mt-dash-export-btn:hover {
+  opacity: 0.85;
+}
+
+.mt-dash-done-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+}
+
+.mt-dash-done-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 4px 0;
+}
+
+.mt-dash-done-section .mt-dash-table {
+  opacity: 0.6;
+}
+
+.mt-dash-priority {
+  width: 32px;
+  text-align: center;
+}
+
+/* --- Kanban --- */
+.mt-kanban-container {
+  padding: 4px 0;
+}
+
+.mt-kanban-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.mt-kanban-filter-label {
+  font-weight: 600;
+}
+
+.mt-kanban-filter-select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.mt-kanban-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.mt-kanban-column {
+  flex: 1 1 0;
+  min-width: 200px;
+  max-width: 300px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.mt-kanban-header {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 4px 8px 8px;
+  border-bottom: 2px solid var(--background-modifier-border);
+  margin-bottom: 8px;
+  color: var(--text-accent);
+}
+
+.mt-kanban-dropzone {
+  min-height: 50px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mt-kanban-drag-over {
+  background: var(--background-modifier-hover);
+  border-radius: 6px;
+}
+
+.mt-kanban-card {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  cursor: grab;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+
+.mt-kanban-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.mt-kanban-dragging {
+  opacity: 0.4;
+}
+
+.mt-kanban-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.mt-kanban-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.mt-kanban-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.mt-kanban-badge-resource {
+  background: var(--interactive-accent);
+  color: #fff;
+  opacity: 0.8;
+}
+
+.mt-kanban-badge-project {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.mt-kanban-card-due {
+  color: var(--text-muted);
+}
+
+.mt-kanban-card-priority {
+  font-size: 12px;
+}
+
+/* --- Gantt --- */
+.mt-gantt-container {
+  padding: 4px 0;
+}
+
+.mt-gantt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.mt-gantt-chart {
+  margin: 12px 0;
+  overflow-x: auto;
+}
+
+.mt-gantt-list {
+  margin-top: 16px;
+}
+
+.mt-gantt-edit-btn {
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.mt-gantt-edit-btn:hover {
+  opacity: 0.7;
+}
+
+.mt-gantt-no-dates {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+.mt-gantt-no-dates h4 {
+  color: var(--text-muted);
+}
