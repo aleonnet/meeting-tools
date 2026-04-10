@@ -3,3 +3,4 @@ data.json
 publish.sh
 submit-to-community.sh
 meeting-tools.zip
+.DS_Store
