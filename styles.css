@@ -16,7 +16,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  padding: max(8px, env(safe-area-inset-top)) 16px 8px;
   background: var(--interactive-accent);
   color: #fff;
   font-size: 13px;
@@ -59,7 +59,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  padding: max(8px, env(safe-area-inset-top)) 16px 8px;
   background: var(--text-error);
   color: #fff;
   font-size: 13px;
