@@ -11,6 +11,11 @@ const MIME_BY_EXT: Record<string, string> = {
   mp4: "audio/mp4",
 };
 
+// Mitigates whisper-1 hallucination loops ('...' blocks) in long audios.
+// Recommended by OpenAI community — not user-facing.
+const WHISPER_HALLUCINATION_PROMPT =
+  "The sentence may be cut off, do not make up words to fill in the rest of the sentence.";
+
 export interface TranscribeResult {
   srtPath: string;
   mdPath: string | null;
@@ -51,6 +56,7 @@ export async function transcribeAudio(
   form.append("model", "whisper-1");
   form.append("response_format", "srt");
   form.append("temperature", "0");
+  form.append("prompt", WHISPER_HALLUCINATION_PROMPT);
 
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",

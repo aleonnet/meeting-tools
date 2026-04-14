@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.1] - 2026-04-14
+
+### Corrigido
+- Loop de alucinação do `whisper-1` em áudios longos (blocos contíguos de `...` após ~40min). Adicionado prompt mitigante recomendado pela comunidade OpenAI no POST da transcrição. Verificado em áudio de 75min: 0 segmentos `...` contra 1008/2063 sem o prompt.
+
 ## [2.0.0] - 2026-04-09
 
 ### Comandos
