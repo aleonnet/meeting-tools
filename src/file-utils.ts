@@ -1,5 +1,43 @@
 import { App, MarkdownView, Plugin, TFile, TFolder } from "obsidian";
 
+/**
+ * Detects audio duration via HTML5 <audio> element. Works in Electron (desktop)
+ * and Obsidian mobile WebView — no ffmpeg needed.
+ *
+ * MediaRecorder webm files lack EBML Duration metadata, so loadedmetadata
+ * reports Infinity. Workaround: seek to end, then read duration on seeked.
+ * Returns null after 10s timeout or on error.
+ */
+export async function getAudioDurationSec(blob: Blob): Promise<number | null> {
+  const url = URL.createObjectURL(blob);
+  return await new Promise<number | null>((resolve) => {
+    let settled = false;
+    const done = (v: number | null) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(v);
+    };
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      if (isFinite(audio.duration) && audio.duration > 0) {
+        done(audio.duration);
+        return;
+      }
+      // webm quirk — force seek to end to populate duration
+      audio.currentTime = Number.MAX_SAFE_INTEGER;
+      audio.onseeked = () => {
+        if (isFinite(audio.duration) && audio.duration > 0) done(audio.duration);
+        else done(null);
+      };
+    };
+    audio.onerror = () => done(null);
+    audio.src = url;
+    setTimeout(() => done(null), 10000);
+  });
+}
+
 export async function ensureFolder(app: App, path: string): Promise<void> {
   const existing = app.vault.getAbstractFileByPath(path);
   if (existing) return;

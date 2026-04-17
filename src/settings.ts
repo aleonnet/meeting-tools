@@ -3,11 +3,19 @@ import type MeetingToolsPlugin from "./main";
 
 const SECRET_ID = "meeting-tools-openai-key";
 
+export type TranscriptionModel =
+  | "auto"
+  | "whisper-1"
+  | "gpt-4o-transcribe-diarize";
+
 export interface MeetingToolsSettings {
   openaiApiKey: string;
   audioDir: string;
   transcriptsDir: string;
+  transcriptionModel: TranscriptionModel;
+  chunkDurationMin: number;
   summaryModel: string;
+  tasksModel: string;
   mindmapModel: string;
   generateMdFromSrt: boolean;
   showPreview: boolean;
@@ -19,7 +27,10 @@ export const DEFAULT_SETTINGS: MeetingToolsSettings = {
   openaiApiKey: "",
   audioDir: "Vault/Audios",
   transcriptsDir: "Vault/Transcripts",
+  transcriptionModel: "auto",
+  chunkDurationMin: 10,
   summaryModel: "gpt-4.1",
+  tasksModel: "gpt-4.1",
   mindmapModel: "gpt-4.1",
   generateMdFromSrt: true,
   showPreview: true,
@@ -149,16 +160,67 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Modelos OpenAI" });
+    containerEl.createEl("h3", { text: "Transcrição" });
+
+    new Setting(containerEl)
+      .setName("Transcription Model")
+      .setDesc(
+        "auto (recomendado): diarize para áudios ≤ 23min, whisper-1 chunked para áudios longos. " +
+        "whisper-1: sempre chunked, sem falantes. " +
+        "gpt-4o-transcribe-diarize: sempre com falantes (áudios > 23min são chunked — falantes podem não casar entre chunks)."
+      )
+      .addDropdown((drop) =>
+        drop
+          .addOption("auto", "Auto (recomendado)")
+          .addOption("whisper-1", "whisper-1 (sem falantes)")
+          .addOption("gpt-4o-transcribe-diarize", "gpt-4o-transcribe-diarize (com falantes)")
+          .setValue(this.plugin.settings.transcriptionModel)
+          .onChange(async (value: string) => {
+            this.plugin.settings.transcriptionModel = value as TranscriptionModel;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Chunk duration (min)")
+      .setDesc(
+        "Duração de cada chunk ao dividir áudios longos. Default 10 (≈18MB WAV 16kHz mono, dentro do limite 25MB). " +
+        "Valores típicos: 5-20. Chunks maiores = menos chamadas de API, mas risco de estourar 25MB em áudios com fala densa."
+      )
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.chunkDurationMin))
+          .onChange(async (value) => {
+            const n = parseInt(value, 10);
+            if (!isNaN(n) && n > 0) {
+              this.plugin.settings.chunkDurationMin = n;
+              await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+            }
+          })
+      );
+
+    containerEl.createEl("h3", { text: "Modelos OpenAI (GPT)" });
 
     new Setting(containerEl)
       .setName("Summary Model")
-      .setDesc("Modelo para geração de resumos.")
+      .setDesc("Modelo para geração de resumos e criação de projetos.")
       .addText((text) =>
         text
           .setValue(this.plugin.settings.summaryModel)
           .onChange(async (value) => {
             this.plugin.settings.summaryModel = value;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Tasks Model")
+      .setDesc("Modelo para extração de tasks.")
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.tasksModel)
+          .onChange(async (value) => {
+            this.plugin.settings.tasksModel = value;
             await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
           })
       );

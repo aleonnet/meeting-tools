@@ -61,7 +61,7 @@ export async function extractTasks(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: plugin.settings.summaryModel,
+      model: plugin.settings.tasksModel,
       temperature: 0.0,
       top_p: 1,
       messages: [

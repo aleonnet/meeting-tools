@@ -1,7 +1,7 @@
 # Roadmap: Transcrição confiável em áudios longos
 
-Status: **backlog** (solução atual = prompt mitigante no whisper-1; ver "Solução atual" abaixo).
-Data do documento: 2026-04-14.
+Status: **implementado na v2.1.0 (2026-04-15)**. Mantido como referência técnica.
+Data do documento original: 2026-04-14.
 
 ## Problema original
 
