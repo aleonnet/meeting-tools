@@ -1,9 +1,10 @@
-import { App, TFile, MarkdownPostProcessorContext } from "obsidian";
+import { App, TFile, MarkdownRenderChild } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import {
-  ParsedTask, parseTasks, getStatusIcon, getPriorityIcon,
+  ParsedTask, parseTasks, getPriorityIcon,
   setTaskStatus,
 } from "./task-parser";
+import { t } from "./i18n";
 
 const STATUS_COLUMNS: { status: string; label: string }[] = [
   { status: " ", label: "Pendente" },
@@ -12,24 +13,13 @@ const STATUS_COLUMNS: { status: string; label: string }[] = [
   { status: "-", label: "Cancelado" },
 ];
 
-// Global registry for kanban refresh
-const activeKanbans: Set<() => Promise<void>> = new Set();
-
-async function refreshAllKanbans(): Promise<void> {
-  for (const render of activeKanbans) {
-    await render();
-  }
-}
-
 function renderKanban(
   el: HTMLElement,
   app: App,
   tasks: ParsedTask[],
   filterType: string,
-  filterValue: string,
-  onRefresh: () => void
+  filterValue: string
 ): void {
-  // Filter tasks
   let filtered = tasks;
   if (filterValue && filterValue !== "__all__") {
     if (filterType === "project") {
@@ -39,18 +29,15 @@ function renderKanban(
     }
   }
 
-  // Kanban board
   const board = el.createDiv({ cls: "mt-kanban-board" });
 
   for (const col of STATUS_COLUMNS) {
     const colTasks = filtered.filter((t) => t.status === col.status);
     const column = board.createDiv({ cls: "mt-kanban-column" });
 
-    // Column header
     const header = column.createDiv({ cls: "mt-kanban-header" });
     header.setText(`${col.label} (${colTasks.length})`);
 
-    // Drop zone
     const dropZone = column.createDiv({ cls: "mt-kanban-dropzone" });
     dropZone.setAttribute("data-status", col.status);
 
@@ -63,6 +50,8 @@ function renderKanban(
       dropZone.removeClass("mt-kanban-drag-over");
     });
 
+    // Drop handler writes the file; the event bus (metadataCache.changed →
+    // "meeting-tools:tasks-changed") refreshes every live render child.
     dropZone.addEventListener("drop", async (e) => {
       e.preventDefault();
       dropZone.removeClass("mt-kanban-drag-over");
@@ -70,10 +59,8 @@ function renderKanban(
       if (!data) return;
       const { filePath, lineNumber } = JSON.parse(data);
       await setTaskStatus(app, filePath, lineNumber, col.status);
-      onRefresh();
     });
 
-    // Cards
     for (const task of colTasks) {
       const card = dropZone.createDiv({ cls: "mt-kanban-card" });
       card.setAttribute("draggable", "true");
@@ -90,7 +77,6 @@ function renderKanban(
         card.removeClass("mt-kanban-dragging");
       });
 
-      // Card content
       const titleEl = card.createDiv({ cls: "mt-kanban-card-title" });
       titleEl.setText(task.text);
 
@@ -118,7 +104,6 @@ function renderKanban(
         metaEl.createSpan({ text: label, cls: `mt-kanban-card-due ${cls}` });
       }
 
-      // Click card to open note
       card.addEventListener("dblclick", () => {
         const f = app.vault.getAbstractFileByPath(task.filePath);
         if (f instanceof TFile) app.workspace.getLeaf(false).openFile(f);
@@ -127,67 +112,78 @@ function renderKanban(
   }
 }
 
+class KanbanChild extends MarkdownRenderChild {
+  private currentFilter = "__all__";
+
+  constructor(
+    containerEl: HTMLElement,
+    private plugin: MeetingToolsPlugin,
+    private filterType: string
+  ) {
+    super(containerEl);
+  }
+
+  onload() {
+    void this.render();
+    this.registerEvent(
+      this.plugin.app.workspace.on(
+        "meeting-tools:tasks-changed" as any,
+        () => void this.render()
+      )
+    );
+  }
+
+  async render(): Promise<void> {
+    const el = this.containerEl;
+    el.empty();
+    const allTasks = await parseTasks(this.plugin.app);
+
+    if (allTasks.length === 0) {
+      el.createEl("p", { text: t().emptyTasks });
+      return;
+    }
+
+    if (this.filterType !== "all") {
+      const toolbar = el.createDiv({ cls: "mt-kanban-toolbar" });
+      const label = this.filterType === "project" ? "Projeto:" : "Responsável:";
+      toolbar.createSpan({ text: label, cls: "mt-kanban-filter-label" });
+
+      const select = toolbar.createEl("select", { cls: "mt-kanban-filter-select" });
+      const optAll = select.createEl("option", { text: "Todos", value: "__all__" });
+
+      const values = new Set<string>();
+      for (const task of allTasks) {
+        const v = this.filterType === "project" ? task.project : task.resource;
+        if (v) values.add(v);
+      }
+
+      for (const v of [...values].sort()) {
+        const opt = select.createEl("option", { text: v, value: v });
+        if (v === this.currentFilter) opt.selected = true;
+      }
+      if (this.currentFilter === "__all__") optAll.selected = true;
+
+      select.addEventListener("change", () => {
+        this.currentFilter = select.value;
+        void this.render();
+      });
+    }
+
+    renderKanban(el, this.plugin.app, allTasks, this.filterType, this.currentFilter);
+  }
+}
+
 export function registerKanban(plugin: MeetingToolsPlugin): void {
   plugin.registerMarkdownCodeBlockProcessor(
     "meeting-kanban",
-    async (source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
+    (source, el, ctx) => {
       const params: Record<string, string> = {};
       for (const line of source.trim().split("\n")) {
         const m = line.match(/^(\w+):\s*(.+)$/);
         if (m) params[m[1]] = m[2].trim();
       }
-
-      const filterType = params.filter || "all";
       el.addClass("mt-kanban-container");
-
-      let currentFilter = "__all__";
-
-      const render = async () => {
-        el.empty();
-        const allTasks = await parseTasks(plugin.app);
-
-        if (allTasks.length === 0) {
-          el.createEl("p", { text: "Nenhuma task encontrada." });
-          return;
-        }
-
-        // Filter combo
-        if (filterType !== "all") {
-          const toolbar = el.createDiv({ cls: "mt-kanban-toolbar" });
-          const label = filterType === "project" ? "Projeto:" : "Responsável:";
-          toolbar.createSpan({ text: label, cls: "mt-kanban-filter-label" });
-
-          const select = toolbar.createEl("select", { cls: "mt-kanban-filter-select" });
-          const optAll = select.createEl("option", { text: "Todos", value: "__all__" });
-
-          const values = new Set<string>();
-          for (const t of allTasks) {
-            const v = filterType === "project" ? t.project : t.resource;
-            if (v) values.add(v);
-          }
-
-          for (const v of [...values].sort()) {
-            const opt = select.createEl("option", { text: v, value: v });
-            if (v === currentFilter) opt.selected = true;
-          }
-          if (currentFilter === "__all__") optAll.selected = true;
-
-          select.addEventListener("change", () => {
-            currentFilter = select.value;
-            render();
-          });
-        }
-
-        renderKanban(el, plugin.app, allTasks, filterType, currentFilter, refreshAllKanbans);
-      };
-
-      activeKanbans.add(render);
-      const obs = new MutationObserver(() => {
-        if (!el.isConnected) { activeKanbans.delete(render); obs.disconnect(); }
-      });
-      obs.observe(el.parentElement || document.body, { childList: true, subtree: true });
-
-      await render();
+      ctx.addChild(new KanbanChild(el, plugin, params.filter || "all"));
     }
   );
 }

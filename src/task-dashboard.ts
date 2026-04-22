@@ -1,27 +1,19 @@
-import { App, TFile, MarkdownPostProcessorContext } from "obsidian";
+import { App, TFile, MarkdownRenderChild } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import {
   ParsedTask, parseTasks, getStatusIcon, getPriorityIcon,
   getAgingCategory, getPriorityCategory,
   cycleTaskStatus, cycleTaskPriority,
 } from "./task-parser";
-
-// Global registry of all active dashboard render functions
-const activeDashboards: Set<() => Promise<void>> = new Set();
-
-async function refreshAllDashboards(): Promise<void> {
-  for (const render of activeDashboards) {
-    await render();
-  }
-}
+import { t } from "./i18n";
 
 function renderGroupedTable(
   el: HTMLElement, app: App, tasks: ParsedTask[],
   groupKey: (t: ParsedTask) => string,
-  showColumns: string[], onRefresh: () => void
+  showColumns: string[]
 ): void {
   if (tasks.length === 0) {
-    el.createEl("p", { text: "Nenhuma task encontrada.", cls: "mt-dash-empty" });
+    el.createEl("p", { text: t().emptyTasks, cls: "mt-dash-empty" });
     return;
   }
 
@@ -59,7 +51,9 @@ function renderGroupedTable(
     for (const task of groupTasks) {
       const row = tbody.createEl("tr");
 
-      // Status — clickable
+      // Status — clickable. No manual refresh: vault.modify fires metadataCache
+      // changed → workspace "meeting-tools:tasks-changed" → every render child
+      // re-renders itself.
       const checkCell = row.createEl("td", { cls: "mt-dash-status" });
       const checkBtn = checkCell.createEl("span", {
         text: getStatusIcon(task.status, task.dueDateObj),
@@ -67,7 +61,6 @@ function renderGroupedTable(
       });
       checkBtn.addEventListener("click", async () => {
         await cycleTaskStatus(app, task.filePath, task.lineNumber);
-        onRefresh();
       });
 
       // Task text
@@ -82,7 +75,6 @@ function renderGroupedTable(
         });
         priBtn.addEventListener("click", async () => {
           await cycleTaskPriority(app, task.filePath, task.lineNumber);
-          onRefresh();
         });
       }
 
@@ -121,11 +113,15 @@ function renderGroupedTable(
 function renderCollapsibleDone(
   el: HTMLElement, app: App, tasks: ParsedTask[],
   groupKey: (t: ParsedTask) => string,
-  showColumns: string[], onRefresh: () => void
+  showColumns: string[],
+  initialOpen: boolean,
+  onToggle: (open: boolean) => void
 ): void {
   const details = el.createEl("details", { cls: "mt-dash-done-section" });
+  if (initialOpen) details.setAttribute("open", "");
+  details.addEventListener("toggle", () => onToggle(details.open));
   details.createEl("summary").setText(`Concluídas / Canceladas (${tasks.length})`);
-  renderGroupedTable(details, app, tasks, groupKey, showColumns, onRefresh);
+  renderGroupedTable(details, app, tasks, groupKey, showColumns);
 }
 
 function exportTasksToCsv(tasks: ParsedTask[]): string {
@@ -152,80 +148,130 @@ function downloadCsv(content: string, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+class TaskDashboardChild extends MarkdownRenderChild {
+  private doneSectionOpen = false;
+
+  constructor(
+    containerEl: HTMLElement,
+    private plugin: MeetingToolsPlugin,
+    private view: string
+  ) {
+    super(containerEl);
+  }
+
+  onload() {
+    void this.render();
+    this.registerEvent(
+      this.plugin.app.workspace.on(
+        "meeting-tools:tasks-changed" as any,
+        () => void this.render()
+      )
+    );
+  }
+
+  async render(): Promise<void> {
+    const el = this.containerEl;
+
+    // Preserve the <details> open state across re-renders.
+    const existingDetails = el.querySelector(
+      "details.mt-dash-done-section"
+    ) as HTMLDetailsElement | null;
+    if (existingDetails) this.doneSectionOpen = existingDetails.open;
+
+    el.empty();
+
+    const s = t();
+    const legend = el.createDiv({ cls: "mt-dash-legend" });
+    const addRow = (label: string, items: string[]) => {
+      const row = legend.createDiv({ cls: "mt-dash-legend-row" });
+      row.createEl("span", {
+        text: label + ":",
+        cls: "mt-dash-legend-label",
+      });
+      for (const it of items) row.createEl("span", { text: it });
+    };
+    addRow(s.legendLabelDue, [
+      `🔴 ${s.legendItemOverdue}`,
+      `🟠 ${s.legendItemToday}`,
+      `🔵 ${s.legendItemThisWeek}`,
+      `⚪ ${s.legendItemFuture}`,
+    ]);
+    addRow(s.legendLabelStatus, [
+      `🟡 ${s.legendItemInProgress}`,
+      `🟢 ${s.legendItemDone}`,
+      `⚫ ${s.legendItemCancelled}`,
+    ]);
+    addRow(s.legendLabelPriority, [
+      `⏫ ${s.legendItemHigh}`,
+      `🔼 ${s.legendItemMedium}`,
+      `🔽 ${s.legendItemLow}`,
+      `➖ ${s.legendItemNoPriority}`,
+    ]);
+    legend.createEl("span", {
+      text: s.legendHint,
+      cls: "mt-dash-legend-hint",
+    });
+
+    const allTasks = await parseTasks(this.plugin.app);
+
+    if (allTasks.length > 0) {
+      el.createEl("button", { text: "📥 Exportar CSV", cls: "mt-dash-export-btn" })
+        .addEventListener("click", () => {
+          downloadCsv(
+            exportTasksToCsv(allTasks),
+            `tasks-${new Date().toISOString().slice(0, 10)}.csv`
+          );
+        });
+    }
+
+    if (allTasks.length === 0) {
+      el.createEl("p", { text: t().emptyTasks });
+      return;
+    }
+
+    const open = allTasks.filter((t) => t.status !== "x" && t.status !== "-");
+    const done = allTasks.filter((t) => t.status === "x" || t.status === "-");
+    const cols = (extra: string[]) => ["priority", ...extra];
+    const onToggle = (isOpen: boolean) => { this.doneSectionOpen = isOpen; };
+    const app = this.plugin.app;
+
+    switch (this.view) {
+      case "project":
+        renderGroupedTable(el, app, open, (t) => t.project || "(sem projeto)", cols(["resource", "due", "aging"]));
+        if (done.length) renderCollapsibleDone(el, app, done, (t) => t.project || "(sem projeto)", cols(["resource", "due"]), this.doneSectionOpen, onToggle);
+        break;
+      case "resource":
+        renderGroupedTable(el, app, open, (t) => t.resource || "(sem responsável)", cols(["project", "due", "aging"]));
+        if (done.length) renderCollapsibleDone(el, app, done, (t) => t.resource || "(sem responsável)", cols(["project", "due"]), this.doneSectionOpen, onToggle);
+        break;
+      case "aging":
+        renderGroupedTable(el, app, open, (t) => getAgingCategory(t), cols(["resource", "project", "due"]));
+        if (done.length) renderCollapsibleDone(el, app, done, () => "Concluídas/Canceladas", cols(["resource", "project", "due"]), this.doneSectionOpen, onToggle);
+        break;
+      case "priority":
+        renderGroupedTable(el, app, open, (t) => getPriorityCategory(t), ["resource", "project", "due", "aging"]);
+        if (done.length) renderCollapsibleDone(el, app, done, () => "Concluídas/Canceladas", ["resource", "project", "due"], this.doneSectionOpen, onToggle);
+        break;
+      case "all":
+      default:
+        renderGroupedTable(el, app, open, () => "Pendentes", cols(["resource", "project", "due", "aging"]));
+        if (done.length) renderCollapsibleDone(el, app, done, () => "Concluídas/Canceladas", cols(["resource", "project", "due"]), this.doneSectionOpen, onToggle);
+        break;
+    }
+  }
+}
+
 export function registerTaskDashboard(plugin: MeetingToolsPlugin): void {
   plugin.registerMarkdownCodeBlockProcessor(
     "meeting-tasks",
-    async (source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
+    (source, el, ctx) => {
       const params: Record<string, string> = {};
       for (const line of source.trim().split("\n")) {
         const m = line.match(/^(\w+):\s*(.+)$/);
         if (m) params[m[1]] = m[2].trim();
       }
-
-      const view = params.view || "all";
       el.addClass("mt-dashboard");
-
-      const render = async () => {
-        el.empty();
-
-        // Legend
-        el.createDiv({ cls: "mt-dash-legend" }).innerHTML = `
-          <span>🔴 Atrasado</span><span>🟠 Hoje</span><span>🔵 Esta semana</span><span>⚪ Futuro</span>
-          <span>🟡 Em progresso</span><span>🟢 Concluído</span><span>⚫ Cancelado</span>
-          <span>|</span><span>⏫ Alta</span><span>🔼 Média</span><span>🔽 Baixa</span><span>➖ Sem</span>
-          <span class="mt-dash-legend-hint">Clique nos ícones para alterar status/prioridade</span>`;
-
-        const allTasks = await parseTasks(plugin.app);
-
-        if (allTasks.length > 0) {
-          el.createEl("button", { text: "📥 Exportar CSV", cls: "mt-dash-export-btn" })
-            .addEventListener("click", () => {
-              downloadCsv(exportTasksToCsv(allTasks), `tasks-${new Date().toISOString().slice(0,10)}.csv`);
-            });
-        }
-
-        if (allTasks.length === 0) {
-          el.createEl("p", { text: "Nenhuma task encontrada." });
-          return;
-        }
-
-        const open = allTasks.filter((t) => t.status !== "x" && t.status !== "-");
-        const done = allTasks.filter((t) => t.status === "x" || t.status === "-");
-        const ref = refreshAllDashboards;
-        const cols = (extra: string[]) => ["priority", ...extra];
-
-        switch (view) {
-          case "project":
-            renderGroupedTable(el, plugin.app, open, (t) => t.project || "(sem projeto)", cols(["resource", "due", "aging"]), ref);
-            if (done.length) renderCollapsibleDone(el, plugin.app, done, (t) => t.project || "(sem projeto)", cols(["resource", "due"]), ref);
-            break;
-          case "resource":
-            renderGroupedTable(el, plugin.app, open, (t) => t.resource || "(sem responsável)", cols(["project", "due", "aging"]), ref);
-            if (done.length) renderCollapsibleDone(el, plugin.app, done, (t) => t.resource || "(sem responsável)", cols(["project", "due"]), ref);
-            break;
-          case "aging":
-            renderGroupedTable(el, plugin.app, open, (t) => getAgingCategory(t), cols(["resource", "project", "due"]), ref);
-            if (done.length) renderCollapsibleDone(el, plugin.app, done, () => "Concluídas/Canceladas", cols(["resource", "project", "due"]), ref);
-            break;
-          case "priority":
-            renderGroupedTable(el, plugin.app, open, (t) => getPriorityCategory(t), ["resource", "project", "due", "aging"], ref);
-            if (done.length) renderCollapsibleDone(el, plugin.app, done, () => "Concluídas/Canceladas", ["resource", "project", "due"], ref);
-            break;
-          case "all":
-          default:
-            renderGroupedTable(el, plugin.app, open, () => "Pendentes", cols(["resource", "project", "due", "aging"]), ref);
-            if (done.length) renderCollapsibleDone(el, plugin.app, done, () => "Concluídas/Canceladas", cols(["resource", "project", "due"]), ref);
-            break;
-        }
-      };
-
-      activeDashboards.add(render);
-      const obs = new MutationObserver(() => {
-        if (!el.isConnected) { activeDashboards.delete(render); obs.disconnect(); }
-      });
-      obs.observe(el.parentElement || document.body, { childList: true, subtree: true });
-
-      await render();
+      ctx.addChild(new TaskDashboardChild(el, plugin, params.view || "all"));
     }
   );
 }

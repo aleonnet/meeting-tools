@@ -1,5 +1,6 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting } from "obsidian";
 import type MeetingToolsPlugin from "./main";
+import { t, type OutputLanguage } from "./i18n";
 
 const SECRET_ID = "meeting-tools-openai-key";
 
@@ -17,10 +18,16 @@ export interface MeetingToolsSettings {
   summaryModel: string;
   tasksModel: string;
   mindmapModel: string;
+  outputLanguage: OutputLanguage;
+  summaryTemplatePath: string;
   generateMdFromSrt: boolean;
   showPreview: boolean;
+  showFileIcons: boolean;
   minWordsForSummary: number;
   userName: string;
+  dismissedArtifacts: string[];
+  onboardingShown: boolean;
+  summaryTemplateCompatDismissed: boolean;
 }
 
 export const DEFAULT_SETTINGS: MeetingToolsSettings = {
@@ -32,10 +39,16 @@ export const DEFAULT_SETTINGS: MeetingToolsSettings = {
   summaryModel: "gpt-4.1",
   tasksModel: "gpt-4.1",
   mindmapModel: "gpt-4.1",
+  outputLanguage: "auto",
+  summaryTemplatePath: "Vault/Templates/Summary Template.md",
   generateMdFromSrt: true,
   showPreview: true,
+  showFileIcons: true,
   minWordsForSummary: 60,
   userName: "user",
+  dismissedArtifacts: [],
+  onboardingShown: false,
+  summaryTemplateCompatDismissed: false,
 };
 
 export function getApiKey(plugin: MeetingToolsPlugin): string {
@@ -103,13 +116,14 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
 
   display(): void {
     const { containerEl } = this;
+    const s = t();
     containerEl.empty();
 
     containerEl.createEl("h2", { text: "Meeting Tools" });
 
     new Setting(containerEl)
-      .setName("OpenAI API Key")
-      .setDesc("Armazenada de forma segura no keychain do sistema.")
+      .setName(s.settingApiKeyName)
+      .setDesc(s.settingApiKeyDesc)
       .addText((text) => {
         text.setPlaceholder("sk-...");
         text.setValue(this.plugin.settings.openaiApiKey);
@@ -121,8 +135,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("User Name")
-      .setDesc("Nome usado nos resumos (ex: itens de ação para [nome]).")
+      .setName(s.settingUserNameName)
+      .setDesc(s.settingUserNameDesc)
       .addText((text) =>
         text
           .setValue(this.plugin.settings.userName)
@@ -132,11 +146,11 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Diretórios" });
+    containerEl.createEl("h3", { text: s.settingSectionDirs });
 
     new Setting(containerEl)
-      .setName("Audio Directory")
-      .setDesc("Pasta para salvar áudios importados/gravados.")
+      .setName(s.settingAudioDirName)
+      .setDesc(s.settingAudioDirDesc)
       .addText((text) =>
         text
           .setPlaceholder("Vault/Audios")
@@ -148,8 +162,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Transcripts Directory")
-      .setDesc("Pasta para salvar transcrições (.srt e .md).")
+      .setName(s.settingTranscriptsDirName)
+      .setDesc(s.settingTranscriptsDirDesc)
       .addText((text) =>
         text
           .setPlaceholder("Vault/Transcripts")
@@ -160,20 +174,16 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Transcrição" });
+    containerEl.createEl("h3", { text: s.settingSectionTranscription });
 
     new Setting(containerEl)
-      .setName("Transcription Model")
-      .setDesc(
-        "auto (recomendado): diarize para áudios ≤ 23min, whisper-1 chunked para áudios longos. " +
-        "whisper-1: sempre chunked, sem falantes. " +
-        "gpt-4o-transcribe-diarize: sempre com falantes (áudios > 23min são chunked — falantes podem não casar entre chunks)."
-      )
+      .setName(s.settingTranscriptionModelName)
+      .setDesc(s.settingTranscriptionModelDesc)
       .addDropdown((drop) =>
         drop
-          .addOption("auto", "Auto (recomendado)")
-          .addOption("whisper-1", "whisper-1 (sem falantes)")
-          .addOption("gpt-4o-transcribe-diarize", "gpt-4o-transcribe-diarize (com falantes)")
+          .addOption("auto", "Auto")
+          .addOption("whisper-1", "whisper-1")
+          .addOption("gpt-4o-transcribe-diarize", "gpt-4o-transcribe-diarize")
           .setValue(this.plugin.settings.transcriptionModel)
           .onChange(async (value: string) => {
             this.plugin.settings.transcriptionModel = value as TranscriptionModel;
@@ -182,11 +192,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Chunk duration (min)")
-      .setDesc(
-        "Duração de cada chunk ao dividir áudios longos. Default 10 (≈18MB WAV 16kHz mono, dentro do limite 25MB). " +
-        "Valores típicos: 5-20. Chunks maiores = menos chamadas de API, mas risco de estourar 25MB em áudios com fala densa."
-      )
+      .setName(s.settingChunkDurationName)
+      .setDesc(s.settingChunkDurationDesc)
       .addText((text) =>
         text
           .setValue(String(this.plugin.settings.chunkDurationMin))
@@ -199,11 +206,11 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Modelos OpenAI (GPT)" });
+    containerEl.createEl("h3", { text: s.settingSectionModels });
 
     new Setting(containerEl)
-      .setName("Summary Model")
-      .setDesc("Modelo para geração de resumos e criação de projetos.")
+      .setName(s.settingSummaryModelName)
+      .setDesc(s.settingSummaryModelDesc)
       .addText((text) =>
         text
           .setValue(this.plugin.settings.summaryModel)
@@ -214,8 +221,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Tasks Model")
-      .setDesc("Modelo para extração de tasks.")
+      .setName(s.settingTasksModelName)
+      .setDesc(s.settingTasksModelDesc)
       .addText((text) =>
         text
           .setValue(this.plugin.settings.tasksModel)
@@ -226,8 +233,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Mindmap Model")
-      .setDesc("Modelo para geração de mindmaps.")
+      .setName(s.settingMindmapModelName)
+      .setDesc(s.settingMindmapModelDesc)
       .addText((text) =>
         text
           .setValue(this.plugin.settings.mindmapModel)
@@ -237,11 +244,41 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Comportamento" });
+    containerEl.createEl("h3", { text: s.settingSectionLanguage });
 
     new Setting(containerEl)
-      .setName("Generate .md from .srt")
-      .setDesc("Gerar automaticamente um .md limpo ao transcrever.")
+      .setName(s.settingOutputLanguageName)
+      .setDesc(s.settingOutputLanguageDesc)
+      .addDropdown((drop) =>
+        drop
+          .addOption("auto", s.settingOutputLanguageAuto)
+          .addOption("pt-BR", s.settingOutputLanguagePt)
+          .addOption("en", s.settingOutputLanguageEn)
+          .setValue(this.plugin.settings.outputLanguage)
+          .onChange(async (value: string) => {
+            this.plugin.settings.outputLanguage = value as OutputLanguage;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingSummaryTemplateName)
+      .setDesc(s.settingSummaryTemplateDesc)
+      .addText((text) =>
+        text
+          .setPlaceholder("Vault/Templates/Summary Template.md")
+          .setValue(this.plugin.settings.summaryTemplatePath)
+          .onChange(async (value) => {
+            this.plugin.settings.summaryTemplatePath = value;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    containerEl.createEl("h3", { text: s.settingSectionBehavior });
+
+    new Setting(containerEl)
+      .setName(s.settingGenerateMdName)
+      .setDesc(s.settingGenerateMdDesc)
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.generateMdFromSrt)
@@ -252,8 +289,8 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Show preview before inserting")
-      .setDesc("Exibir preview editável antes de inserir resumo/mindmap.")
+      .setName(s.settingShowPreviewName)
+      .setDesc(s.settingShowPreviewDesc)
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.showPreview)
@@ -264,8 +301,20 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Min words for summary")
-      .setDesc("Transcrições abaixo desse limite geram resumo genérico.")
+      .setName(s.settingShowFileIconsName)
+      .setDesc(s.settingShowFileIconsDesc)
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showFileIcons)
+          .onChange(async (value) => {
+            this.plugin.settings.showFileIcons = value;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingMinWordsName)
+      .setDesc(s.settingMinWordsDesc)
       .addText((text) =>
         text
           .setValue(String(this.plugin.settings.minWordsForSummary))

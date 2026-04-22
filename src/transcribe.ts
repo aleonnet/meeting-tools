@@ -4,6 +4,7 @@ import {
   baseName,
   ensureFolder,
   getAudioDurationSec,
+  showApiKeyMissingNotice,
   srtToPlainText,
 } from "./file-utils";
 import {
@@ -12,6 +13,8 @@ import {
   sliceBufferToChunks,
 } from "./audio-chunking";
 import type { TranscriptionModel } from "./settings";
+import { t } from "./i18n";
+import { parseOpenAIError } from "./openai-errors";
 
 const MIME_BY_EXT: Record<string, string> = {
   webm: "audio/webm",
@@ -58,13 +61,13 @@ export async function transcribeAudio(
   const { app, settings } = plugin;
   const apiKey = plugin.getApiKey();
   if (!apiKey) {
-    new Notice("Configure a OpenAI API Key.");
+    showApiKeyMissingNotice(plugin);
     return null;
   }
 
   const file = app.vault.getAbstractFileByPath(audioPath);
   if (!file || !(file instanceof TFile)) {
-    new Notice("Áudio não encontrado: " + audioPath);
+    new Notice(t().noticeAudioNotFound(audioPath));
     return null;
   }
 
@@ -85,7 +88,7 @@ export async function transcribeAudio(
   try {
     if (mode === "whisper-chunked") {
       modelLabel = "whisper-1 (chunked)";
-      new Notice(`Transcrevendo com ${modelLabel}…`);
+      new Notice(t().noticeTranscribingWith(modelLabel));
       const result = await transcribeWhisperChunked(
         plugin,
         apiKey,
@@ -93,16 +96,16 @@ export async function transcribeAudio(
         settings.chunkDurationMin
       );
       srtText = result.srt;
-      mdBody = srtToPlainText(srtText) || "_(transcrição vazia)_";
+      mdBody = srtToPlainText(srtText) || t().transcriptEmptyMarker;
     } else if (mode === "diarize-single") {
       modelLabel = "gpt-4o-transcribe-diarize";
-      new Notice(`Transcrevendo com ${modelLabel}…`);
+      new Notice(t().noticeTranscribingWith(modelLabel));
       const json = await postDiarize(apiKey, blob, file.name);
       srtText = diarizedToSrt(json);
       mdBody = diarizedToMd(json) || "_(transcrição vazia)_";
     } else if (mode === "diarize-chunked") {
       modelLabel = "gpt-4o-transcribe-diarize (chunked)";
-      new Notice(`Transcrevendo com ${modelLabel}…`);
+      new Notice(t().noticeTranscribingWith(modelLabel));
       const merged = await transcribeDiarizeChunked(
         plugin,
         apiKey,
@@ -116,19 +119,19 @@ export async function transcribeAudio(
       // file already fits a single call. For simplicity we still go through
       // the chunked path (1 chunk) — guarantees consistent behavior.
       modelLabel = "whisper-1";
-      new Notice(`Transcrevendo com ${modelLabel}…`);
+      new Notice(t().noticeTranscribingWith(modelLabel));
       if (buf.byteLength > MAX_UPLOAD_BYTES) {
         new Notice(
-          `Arquivo excede 25MB (${(buf.byteLength / 1024 / 1024).toFixed(1)}MB). Ative chunking (modo auto).`
+          t().noticeFileExceedsLimit((buf.byteLength / 1024 / 1024).toFixed(1))
         );
         return null;
       }
       srtText = await postWhisper(apiKey, blob, file.name);
-      mdBody = srtToPlainText(srtText) || "_(transcrição vazia)_";
+      mdBody = srtToPlainText(srtText) || t().transcriptEmptyMarker;
     }
   } catch (e: any) {
     console.error("[MeetingTools] Transcription error:", e);
-    new Notice("Falha ao gerar transcrição: " + (e?.message ?? e));
+    new Notice(t().noticeTranscribeFailed(e?.message ?? String(e)));
     return null;
   }
 
@@ -139,19 +142,19 @@ export async function transcribeAudio(
   } else {
     await app.vault.create(srtPath, srtText);
   }
-  new Notice("SRT salvo: " + srtPath);
+  new Notice(t().noticeSrtSaved(srtPath));
 
   let mdPath: string | null = null;
   if (settings.generateMdFromSrt) {
     mdPath = `${settings.transcriptsDir}/${baseName(audioPath)}.md`;
-    const content = `# Transcrição\n\n![[${audioPath}]]\n\n${mdBody}`;
+    const content = `${t().transcriptMdHeader}\n\n![[${audioPath}]]\n\n${mdBody}`;
     const existingMd = app.vault.getAbstractFileByPath(mdPath);
     if (existingMd instanceof TFile) {
       await app.vault.modify(existingMd, content);
     } else {
       await app.vault.create(mdPath, content);
     }
-    new Notice("MD salvo: " + mdPath);
+    new Notice(t().noticeMdSaved(mdPath));
   }
 
   return { srtPath, mdPath };
@@ -194,14 +197,25 @@ async function postWhisper(
   form.append("temperature", "0");
   form.append("prompt", WHISPER_HALLUCINATION_PROMPT);
 
-  const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: "Bearer " + apiKey },
-    body: form,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey },
+      body: form,
+    });
+  } catch (e) {
+    const err = parseOpenAIError(null, e);
+    console.error("[MeetingTools] whisper network error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "network_error");
+  }
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "(no body)");
-    throw new Error("whisper-1: " + err.slice(0, 300));
+    const json = await resp.json().catch(() => null);
+    const err = parseOpenAIError({ status: resp.status, json });
+    console.error("[MeetingTools] whisper error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "openai_error");
   }
   return await resp.text();
 }
@@ -219,7 +233,7 @@ async function transcribeWhisperChunked(
   const srts: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    new Notice(`Transcrevendo chunk ${i + 1}/${chunks.length}…`);
+    new Notice(t().noticeTranscribingChunk(i + 1, chunks.length));
     try {
       const srt = await postWithRetry(async () =>
         postWhisper(apiKey, chunks[i], `chunk-${i + 1}.wav`)
@@ -229,7 +243,7 @@ async function transcribeWhisperChunked(
       const startSec = i * chunkSec;
       const endSec = startSec + chunkSec;
       console.error(`[MeetingTools] chunk ${i + 1} failed:`, e);
-      new Notice(`Chunk ${i + 1} falhou — continuando.`);
+      new Notice(t().noticeChunkFailed(i + 1));
       srts.push(
         `1\n${formatSrtTime(0)} --> ${formatSrtTime(endSec - startSec)}\n[chunk ${i + 1} falhou: ${formatSrtTime(startSec)}–${formatSrtTime(endSec)}]\n`
       );
@@ -253,14 +267,25 @@ async function postDiarize(
   form.append("chunking_strategy", "auto");
   form.append("temperature", "0");
 
-  const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: "Bearer " + apiKey },
-    body: form,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey },
+      body: form,
+    });
+  } catch (e) {
+    const err = parseOpenAIError(null, e);
+    console.error("[MeetingTools] diarize network error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "network_error");
+  }
   if (!resp.ok) {
-    const err = await resp.text().catch(() => "(no body)");
-    throw new Error("diarize: " + err.slice(0, 300));
+    const json = await resp.json().catch(() => null);
+    const err = parseOpenAIError({ status: resp.status, json });
+    console.error("[MeetingTools] diarize error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "openai_error");
   }
   return (await resp.json()) as DiarizedResponse;
 }
@@ -277,7 +302,7 @@ async function transcribeDiarizeChunked(
   let fullText = "";
 
   for (let i = 0; i < chunks.length; i++) {
-    new Notice(`Transcrevendo chunk ${i + 1}/${chunks.length}…`);
+    new Notice(t().noticeTranscribingChunk(i + 1, chunks.length));
     try {
       const json = await postWithRetry(async () =>
         postDiarize(apiKey, chunks[i], `chunk-${i + 1}.wav`)
@@ -294,7 +319,7 @@ async function transcribeDiarizeChunked(
       if (json.text) fullText += (fullText ? " " : "") + json.text;
     } catch (e: any) {
       console.error(`[MeetingTools] diarize chunk ${i + 1} failed:`, e);
-      new Notice(`Chunk ${i + 1} falhou — continuando.`);
+      new Notice(t().noticeChunkFailed(i + 1));
       const startSec = i * chunkSec;
       allSegments.push({
         start: startSec,

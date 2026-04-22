@@ -1,12 +1,17 @@
-import { Notice, MarkdownView, TFile, TFolder, requestUrl } from "obsidian";
+import { Notice, TFile, TFolder, requestUrl } from "obsidian";
 import type MeetingToolsPlugin from "./main";
-import { ContextResult, insertAtCursor, insertAfterContext } from "./file-utils";
+import {
+  ContextResult,
+  insertAtCursor,
+  insertAfterContext,
+  showApiKeyMissingNotice,
+} from "./file-utils";
 import { PreviewModal } from "./modals";
 import { EXTRACT_TASKS_PROMPT } from "./prompts";
+import { resolveLanguageInstruction, t } from "./i18n";
+import { buildTaskContextPreamble, detectMeetingContext } from "./task-context";
+import { parseOpenAIError } from "./openai-errors";
 
-/**
- * Find project files in Vault/Projects/ and resolve wikilinks in task text.
- */
 function resolveProjectLinks(plugin: MeetingToolsPlugin, text: string): string {
   const app = plugin.app;
   const projectsFolder = app.vault.getAbstractFileByPath("Vault/Projects");
@@ -36,63 +41,84 @@ export async function extractTasks(
 ): Promise<void> {
   const apiKey = plugin.getApiKey();
   if (!apiKey) {
-    new Notice("Configure a OpenAI API Key nas settings do Meeting Tools.");
+    showApiKeyMissingNotice(plugin);
     return;
   }
 
   if (!inputText) {
-    new Notice("Nenhum texto fornecido para extração de tasks.");
+    new Notice(t().noticeNoInputForTasks);
     return;
   }
   const inputContent = inputText;
 
   if (inputContent.trim().split(/\s+/).length < 10) {
-    new Notice("Conteúdo muito curto para extrair tasks.");
+    new Notice(t().noticeContentTooShortForTasks);
     return;
   }
 
-  new Notice("Extraindo tasks…");
+  new Notice(t().noticeExtractingTasks);
 
-  const res = await requestUrl({
-    url: "https://api.openai.com/v1/chat/completions",
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: plugin.settings.tasksModel,
-      temperature: 0.0,
-      top_p: 1,
-      messages: [
-        { role: "system", content: EXTRACT_TASKS_PROMPT },
-        { role: "user", content: inputContent },
-      ],
-    }),
-  });
+  const meetingContext = detectMeetingContext(plugin);
+  const taskContextPreamble = buildTaskContextPreamble(meetingContext);
+  const systemPrompt =
+    resolveLanguageInstruction(plugin.settings.outputLanguage) +
+    "\n\n" +
+    EXTRACT_TASKS_PROMPT.replace("{{task_context}}", taskContextPreamble);
 
-  if (res.status !== 200 || res.json?.error) {
-    console.error("[MeetingTools] Extract tasks error:", res.json?.error || res);
-    new Notice("Falha ao extrair tasks.");
+  let res;
+  try {
+    res = await requestUrl({
+      url: "https://api.openai.com/v1/chat/completions",
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: plugin.settings.tasksModel,
+        temperature: 0.0,
+        top_p: 1,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: inputContent },
+        ],
+      }),
+      throw: false,
+    });
+  } catch (e) {
+    const err = parseOpenAIError(null, e);
+    console.error("[MeetingTools] OpenAI network error:", err);
+    new Notice(err.friendly, 10000);
+    return;
+  }
+
+  if (res.status >= 400 || res.json?.error) {
+    const err = parseOpenAIError({ status: res.status, json: res.json, text: res.text });
+    console.error("[MeetingTools] Extract tasks error:", err);
+    new Notice(err.friendly, 10000);
     return;
   }
 
   let tasksText = res.json?.choices?.[0]?.message?.content ?? "";
 
-  if (!tasksText || tasksText.includes("Nenhum item de ação identificado")) {
-    new Notice("Nenhum item de ação identificado no texto.");
+  // Empty-result detection. Matches the EN prompt wording and the previous PT-BR
+  // fallback in case the model sticks to legacy phrasing.
+  if (
+    !tasksText ||
+    /no action items identified/i.test(tasksText) ||
+    tasksText.includes("Nenhum item de ação identificado")
+  ) {
+    new Notice(t().noticeNoTasksFound);
     return;
   }
 
-  // Resolve project wikilinks against actual vault files
   tasksText = resolveProjectLinks(plugin, tasksText);
 
-  // Preview
   let finalText = tasksText;
   if (plugin.settings.showPreview) {
     const modal = new PreviewModal(
       plugin.app,
-      "Tasks extraídas — revise antes de inserir",
+      t().modalPreview,
       tasksText
     );
     modal.open();
@@ -104,5 +130,5 @@ export async function extractTasks(
   const inserted = context
     ? insertAfterContext(plugin.app, finalText, context)
     : insertAtCursor(plugin.app, finalText);
-  if (inserted) new Notice("Tasks inseridas.");
+  if (inserted) new Notice(t().noticeTasksInserted);
 }

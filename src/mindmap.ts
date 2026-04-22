@@ -6,18 +6,21 @@ import {
   insertAtCursor,
   insertAfterContext,
   nowParts,
+  showApiKeyMissingNotice,
 } from "./file-utils";
 import { PreviewModal, TranscriptSuggestModal } from "./modals";
 import { MINDMAP_PROMPT } from "./prompts";
+import { resolveLanguageInstruction, t } from "./i18n";
+import { parseOpenAIError } from "./openai-errors";
 
 function sanitizeMindmapLabels(text: string): string {
   if (!text) return "";
-  let t = text
+  let out = text
     .replace(/\r/g, "")
     .replace(/\u00A0/g, " ")
     .replace(/[–—]/g, "-");
-  t = t.replace(/[:]/g, " - ").replace(/[\[\]\(\)]/g, "");
-  t = t
+  out = out.replace(/[:]/g, " - ").replace(/[\[\]\(\)]/g, "");
+  out = out
     .split("\n")
     .map((line) => {
       const m = line.match(/^(\s*)(.*)$/);
@@ -29,7 +32,7 @@ function sanitizeMindmapLabels(text: string): string {
       return indent + label;
     })
     .join("\n");
-  return t.trim();
+  return out.trim();
 }
 
 function toMermaidMindmap(raw: string): string {
@@ -48,7 +51,7 @@ function toMermaidMindmap(raw: string): string {
 }
 
 function fallbackMermaidMindmap(): string {
-  return "```mermaid\nmindmap\n  Reunião\n    Sem dados suficientes\n```";
+  return "```mermaid\nmindmap\n  Meeting\n    Not enough data\n```";
 }
 
 async function openaiChat(
@@ -57,26 +60,37 @@ async function openaiChat(
   system: string,
   user: string
 ): Promise<string> {
-  const res = await requestUrl({
-    url: "https://api.openai.com/v1/chat/completions",
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.0,
-      top_p: 1,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  if (res.status !== 200 || res.json?.error) {
-    console.error("[MeetingTools] OpenAI error:", res.json?.error || res);
-    throw new Error("Falha na chamada OpenAI.");
+  let res;
+  try {
+    res = await requestUrl({
+      url: "https://api.openai.com/v1/chat/completions",
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.0,
+        top_p: 1,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+      throw: false,
+    });
+  } catch (e) {
+    const err = parseOpenAIError(null, e);
+    console.error("[MeetingTools] OpenAI network error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "network_error");
+  }
+  if (res.status >= 400 || res.json?.error) {
+    const err = parseOpenAIError({ status: res.status, json: res.json, text: res.text });
+    console.error("[MeetingTools] OpenAI error:", err);
+    new Notice(err.friendly, 10000);
+    throw new Error(err.code ?? "openai_error");
   }
   return res.json?.choices?.[0]?.message?.content ?? "";
 }
@@ -89,7 +103,7 @@ export async function generateMindmap(
   const { app, settings } = plugin;
   const apiKey = plugin.getApiKey();
   if (!apiKey) {
-    new Notice("Configure a OpenAI API Key nas settings do Meeting Tools.");
+    showApiKeyMissingNotice(plugin);
     return;
   }
 
@@ -100,14 +114,13 @@ export async function generateMindmap(
   } else if (transcriptPath) {
     const file = app.vault.getAbstractFileByPath(transcriptPath);
     if (!file || !(file instanceof TFile)) {
-      new Notice("Arquivo não encontrado: " + transcriptPath);
+      new Notice(t().noticeFileNotFound(transcriptPath));
       return;
     }
     const raw = await app.vault.read(file);
     const ext = (file.extension || "").toLowerCase();
     plain = ext === "srt" ? srtToPlainText(raw) : raw;
   } else {
-    // Fallback: open fuzzy modal
     const path = await new Promise<string | null>((resolve) => {
       new TranscriptSuggestModal(app, settings.transcriptsDir, (p) =>
         resolve(p)
@@ -116,7 +129,7 @@ export async function generateMindmap(
     if (!path) return;
     const file = app.vault.getAbstractFileByPath(path);
     if (!file || !(file instanceof TFile)) {
-      new Notice("Arquivo não encontrado: " + path);
+      new Notice(t().noticeFileNotFound(path));
       return;
     }
     const raw = await app.vault.read(file);
@@ -124,12 +137,14 @@ export async function generateMindmap(
     plain = ext === "srt" ? srtToPlainText(raw) : raw;
   }
 
-  new Notice("Gerando mindmap…");
+  new Notice(t().noticeGeneratingMindmap);
+  const systemPrompt =
+    resolveLanguageInstruction(settings.outputLanguage) + "\n\n" + MINDMAP_PROMPT;
   let out = await openaiChat(
     apiKey,
     settings.mindmapModel,
-    MINDMAP_PROMPT,
-    `Transcrição:\n"""${plain.slice(-120000)}"""`
+    systemPrompt,
+    `Transcript:\n"""${plain.slice(-120000)}"""`
   );
 
   out = toMermaidMindmap(out);
@@ -138,7 +153,7 @@ export async function generateMindmap(
   let finalText = out;
 
   if (settings.showPreview) {
-    const modal = new PreviewModal(app, "Preview do Mindmap", finalText);
+    const modal = new PreviewModal(app, t().modalPreview, finalText);
     modal.open();
     const result = await modal.waitForResult();
     if (result === null) return;
@@ -148,5 +163,5 @@ export async function generateMindmap(
   const inserted = context
     ? insertAfterContext(app, finalText, context)
     : insertAtCursor(app, finalText);
-  if (inserted) new Notice("Mapa mental inserido.");
+  if (inserted) new Notice(t().noticeMindmapInserted);
 }

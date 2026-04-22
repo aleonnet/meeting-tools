@@ -33,7 +33,7 @@ Acessíveis via `Cmd+P` ou pelo ícone briefcase no ribbon (sidebar esquerda):
 | Comando | Descrição |
 |---------|-----------|
 | **New Project from Document** | File picker (PDF/PPTX/TXT) → extrai texto → GPT gera nota do projeto → preview → salva em Projects/. Documento original salvo em Projects/Documents/. |
-| **Full Pipeline** | Import → Transcribe → Summarize → Extract Tasks → Mindmap. Status bar mostra etapa atual. |
+| **Full Pipeline** | Import → Transcribe → Summarize → Mindmap. Status bar mostra etapa atual. Tasks parseáveis saem direto na seção 2 do resumo (formato único com Extract Tasks). |
 | **Setup Vault** | Cria a estrutura completa de pastas e arquivos: templates, dashboards, views. Não sobrescreve existentes. |
 
 ### Lógica de contexto (Summarize, Mindmap, Extract Tasks)
@@ -160,11 +160,47 @@ Em Obsidian → Settings → Meeting Tools:
 | User Name | Nome nos resumos (itens de ação para [nome]) | Alessandro |
 | Audio Directory | Pasta para áudios | Vault/Audios |
 | Transcripts Directory | Pasta para transcrições | Vault/Transcripts |
-| Summary Model | Modelo OpenAI para resumos | gpt-4.1 |
+| Transcription Model | `auto` / `whisper-1` / `gpt-4o-transcribe-diarize` | auto |
+| Chunk duration (min) | Tamanho dos chunks em áudios longos | 10 |
+| Summary Model | Modelo OpenAI para resumos e criação de projetos | gpt-4.1 |
+| Tasks Model | Modelo OpenAI para extração de tasks | gpt-4.1 |
 | Mindmap Model | Modelo OpenAI para mindmaps | gpt-4.1 |
+| AI output language | `Auto (match transcript)` / `pt-BR` / `en` | Auto |
+| Summary template file | Caminho do `.md` com prompt editável | Vault/Templates/Summary Template.md |
 | Generate .md from .srt | Gerar .md limpo ao transcrever | ✅ |
 | Show preview | Preview editável antes de inserir | ✅ |
 | Min words for summary | Mínimo de palavras para usar contexto automático | 60 |
+
+## Idioma (i18n)
+
+A UI (Notices, Settings, menus) segue automaticamente o idioma do Obsidian. Suportados: **English** e **Português do Brasil**. Qualquer outro locale cai em English. Trocar o idioma do Obsidian reflete na UI após recarregar o plugin.
+
+A saída de IA é controlada pela setting **AI output language**:
+- **Auto (match transcript)** — o LLM responde no mesmo idioma da transcrição/input (default).
+- **Portuguese (Brazil)** — força PT-BR.
+- **English** — força EN.
+
+## Template editável (Summarize)
+
+O prompt do Summarize vive em `Vault/Templates/Summary Template.md` (criado pelo Setup Vault). Edite livremente. Placeholders:
+- `{{language_instruction}}` — substituído pela setting de idioma acima
+- `{{user_name}}` — nome do usuário
+- `{{task_context}}` — preamble dinâmico com User name, wikilinks do time block header e tag `#projects/` (quando resolve). Compartilhado com Extract Tasks.
+- `{{task_format_spec}}` — spec de formato + regras das tasks (formato `- [ ] ... [resource::] #task ...` parseável pelos dashboards).
+- `{{transcript}}` — o texto da transcrição (obrigatório manter)
+
+### Como o projeto é atribuído às tasks
+
+A fonte é o **header do time block** onde o cursor está (linha `### HH:MM ...`):
+
+- `### 10:00 - Reunião [[Kaidô]]` + `Vault/Projects/Kaidô.md` existe → cada task recebe `#task #projects/kaido [[Kaidô]]`.
+- `### 10:00 - Reunião [[Kaidô]] [[Deck.pptx]]` → todos os wikilinks são aplicados; tag `#projects/kaido` só se `Kaidô.md` existir.
+- `### 10:00 - Reunião [[Deck.pptx]]` (sem arquivo `Deck.pptx.md` em `Vault/Projects/`) → task recebe `[[Deck.pptx]]` mas sem tag (agrupa em "sem projeto" nos dashboards).
+- `### 10:00 - Reunião` (sem wikilinks) → task recebe literal `[[No project]]`.
+
+Tasks em **1ª pessoa** ("eu vou revisar", "I'll check") são atribuídas automaticamente ao `User Name` configurado nas settings.
+
+Se o arquivo for deletado/renomeado, o comando cai automaticamente no template embutido (operação não quebra).
 
 ## Dependências
 

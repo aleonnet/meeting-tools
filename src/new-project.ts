@@ -1,8 +1,10 @@
 import { Notice, Platform, requestUrl, TFile } from "obsidian";
 import type MeetingToolsPlugin from "./main";
-import { ensureFolder, saveArrayBufferToVault } from "./file-utils";
+import { ensureFolder, saveArrayBufferToVault, showApiKeyMissingNotice } from "./file-utils";
 import { PreviewModal } from "./modals";
 import { NEW_PROJECT_PROMPT } from "./prompts";
+import { resolveLanguageInstruction, t } from "./i18n";
+import { parseOpenAIError } from "./openai-errors";
 
 /**
  * Extracts text from a File object based on its type.
@@ -142,7 +144,7 @@ function extractTextFromPptx(buf: ArrayBuffer): string {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
   if (slideFiles.length === 0) {
-    throw new Error("Nenhum slide encontrado no arquivo PPTX.");
+    throw new Error(t().errorNoPptxSlides);
   }
 
   const textParts: string[] = [];
@@ -167,7 +169,7 @@ function extractTextFromPptx(buf: ArrayBuffer): string {
   }
 
   if (textParts.length === 0) {
-    throw new Error("Nenhum texto encontrado nos slides do PPTX.");
+    throw new Error(t().errorNoPptxText);
   }
 
   return textParts.join(" ");
@@ -222,7 +224,7 @@ export async function newProjectFromDocument(
   const { app, settings } = plugin;
   const apiKey = plugin.getApiKey();
   if (!apiKey) {
-    new Notice("Configure a OpenAI API Key nas settings do Meeting Tools.");
+    showApiKeyMissingNotice(plugin);
     return;
   }
 
@@ -255,17 +257,17 @@ export async function newProjectFromDocument(
   });
 
   if (!chosen) {
-    new Notice("Operação cancelada.");
+    new Notice(t().noticeOperationCancelled);
     return;
   }
 
   const ext = chosen.name.split(".").pop()?.toLowerCase() || "";
   if (Platform.isMobile && ["pdf", "pptx", "ppt"].includes(ext)) {
-    new Notice("Extração de PDF/PPTX requer desktop. Use um arquivo TXT.");
+    new Notice(t().noticeDesktopOnlyExtract);
     return;
   }
 
-  new Notice("Lendo documento: " + chosen.name);
+  new Notice(t().noticeReadingDocument(chosen.name));
 
   // Get vault base path for temp file operations
   const adapter = app.vault.adapter as any;
@@ -278,13 +280,13 @@ export async function newProjectFromDocument(
   try {
     docText = await extractTextFromFile(chosen, vaultBasePath);
   } catch (e: any) {
-    new Notice("Erro ao ler documento: " + e.message);
+    new Notice(t().noticeDocumentReadError(e.message));
     console.error("[MeetingTools]", e);
     return;
   }
 
   if (!docText || docText.trim().length < 20) {
-    new Notice("Não foi possível extrair texto suficiente do documento.");
+    new Notice(t().noticeDocumentTextTooShort);
     return;
   }
 
@@ -301,38 +303,52 @@ export async function newProjectFromDocument(
     docBuf
   );
   console.log("[MeetingTools] Documento salvo em:", savedDocPath);
-  new Notice("Documento salvo em: " + savedDocPath);
+  new Notice(t().noticeDocumentSaved(savedDocPath));
 
-  new Notice("Gerando nota do projeto…");
+  new Notice(t().noticeGeneratingProjectNote);
 
-  // Send to LLM
-  const res = await requestUrl({
-    url: "https://api.openai.com/v1/chat/completions",
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: settings.summaryModel,
-      temperature: 0.0,
-      top_p: 1,
-      messages: [
-        { role: "system", content: NEW_PROJECT_PROMPT },
-        { role: "user", content: docText.slice(0, 120000) },
-      ],
-    }),
-  });
+  const systemPrompt =
+    resolveLanguageInstruction(settings.outputLanguage) +
+    "\n\n" +
+    NEW_PROJECT_PROMPT;
 
-  if (res.status !== 200 || res.json?.error) {
-    console.error("[MeetingTools] New project error:", res.json?.error || res);
-    new Notice("Falha ao gerar nota do projeto.");
+  let res;
+  try {
+    res = await requestUrl({
+      url: "https://api.openai.com/v1/chat/completions",
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: settings.summaryModel,
+        temperature: 0.0,
+        top_p: 1,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: docText.slice(0, 120000) },
+        ],
+      }),
+      throw: false,
+    });
+  } catch (e) {
+    const err = parseOpenAIError(null, e);
+    console.error("[MeetingTools] OpenAI network error:", err);
+    new Notice(err.friendly, 10000);
+    return;
+  }
+
+  if (res.status >= 400 || res.json?.error) {
+    const err = parseOpenAIError({ status: res.status, json: res.json, text: res.text });
+    console.error("[MeetingTools] New project error:", err);
+    new Notice(err.friendly, 10000);
     return;
   }
 
   let projectContent = res.json?.choices?.[0]?.message?.content ?? "";
   if (!projectContent) {
-    new Notice("Resposta vazia do LLM.");
+    new Notice(t().noticeLlmEmpty);
     return;
   }
 
@@ -350,9 +366,8 @@ export async function newProjectFromDocument(
 \`\`\`
 `;
 
-  // Preview
   if (settings.showPreview) {
-    const modal = new PreviewModal(app, "Preview da nota do projeto", projectContent);
+    const modal = new PreviewModal(app, t().modalPreview, projectContent);
     modal.open();
     const result = await modal.waitForResult();
     if (result === null) return;
@@ -374,7 +389,7 @@ export async function newProjectFromDocument(
     await app.vault.create(projectPath, projectContent);
   }
 
-  new Notice("Projeto criado: " + projectPath);
+  new Notice(t().noticeProjectCreated(projectPath));
 
   // Open the new project note
   const newFile = app.vault.getAbstractFileByPath(projectPath);

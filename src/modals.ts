@@ -6,6 +6,7 @@ import {
   TFolder,
   MarkdownRenderer,
 } from "obsidian";
+import { t } from "./i18n";
 
 // --- File Suggest Modals ---
 
@@ -61,7 +62,7 @@ export class AudioSuggestModal extends FileSuggestModal {
       new Set(["webm", "m4a", "mp3", "wav", "ogg", "mp4"]),
       onChoose
     );
-    this.setPlaceholder("Selecione um arquivo de áudio...");
+    this.setPlaceholder(t().modalAudioSuggestPlaceholder);
   }
 }
 
@@ -72,7 +73,7 @@ export class TranscriptSuggestModal extends FileSuggestModal {
     onChoose: (path: string | null) => void
   ) {
     super(app, transcriptsDir, new Set(["md", "srt"]), onChoose);
-    this.setPlaceholder("Selecione uma transcrição (.md ou .srt)...");
+    this.setPlaceholder(t().modalTranscriptSuggestPlaceholder);
   }
 }
 
@@ -139,42 +140,48 @@ export class PreviewModal extends Modal {
     const previewDiv = contentEl.createDiv({ cls: "meeting-tools-preview" });
     previewDiv.style.display = "none";
 
+    // Footer with live word/line counter
+    const footer = contentEl.createDiv({ cls: "meeting-tools-preview-footer" });
+    const s = t();
+    const updateFooter = () => {
+      const text = textarea.value;
+      const wc = text.trim().split(/\s+/).filter(Boolean).length;
+      const lines = text.split("\n").length;
+      footer.setText(s.previewFooter(wc, lines));
+    };
+    textarea.addEventListener("input", updateFooter);
+    updateFooter();
+
     // Button row — always at bottom
     const btnRow = contentEl.createDiv({ cls: "meeting-tools-btn-row" });
-
-    // Cancel
-    const cancelBtn = btnRow.createEl("button", { text: "Cancelar" });
+    const cancelBtn = btnRow.createEl("button", { text: s.btnCancelPlain });
     cancelBtn.addEventListener("click", () => {
       this.doResolve(null);
       this.close();
     });
 
-    // Preview toggle
-    const previewBtn = btnRow.createEl("button", { text: "Preview" });
+    const previewBtn = btnRow.createEl("button", { text: s.modalPreview });
     let showingPreview = false;
     previewBtn.onclick = async () => {
       if (!showingPreview) {
         this.content = textarea.value;
         textarea.style.display = "none";
         previewDiv.style.display = "block";
-        previewBtn.textContent = "Editar";
+        previewBtn.textContent = s.modalEdit;
         showingPreview = true;
         previewDiv.empty();
-        // Use MarkdownRenderer with the modal itself as component
-        // (Modal extends Component in Obsidian API)
         await MarkdownRenderer.renderMarkdown(this.content, previewDiv, "", this);
       } else {
         textarea.value = this.content;
         previewDiv.style.display = "none";
         textarea.style.display = "block";
-        previewBtn.textContent = "Preview";
+        previewBtn.textContent = s.modalPreview;
         showingPreview = false;
         textarea.focus();
       }
     };
 
-    // Save
-    const saveBtn = btnRow.createEl("button", { text: "Inserir", cls: "mod-cta" });
+    const saveBtn = btnRow.createEl("button", { text: s.modalInsert, cls: "mod-cta" });
     saveBtn.addEventListener("click", () => {
       this.content = showingPreview ? this.content : textarea.value;
       this.doResolve(this.content);
@@ -194,6 +201,45 @@ export class PreviewModal extends Modal {
     return new Promise((resolve) => {
       this.resolvePromise = resolve;
     });
+  }
+}
+
+// --- Guide Modal (read-only markdown) ---
+
+export class GuideModal extends Modal {
+  private content: string;
+  private title: string;
+
+  constructor(app: App, title: string, content: string) {
+    super(app);
+    this.title = title;
+    this.content = content;
+  }
+
+  onOpen() {
+    const { contentEl, modalEl } = this;
+    contentEl.empty();
+    modalEl.addClass("meeting-tools-modal");
+
+    const titleEl = contentEl.createEl("h3", { text: this.title });
+    titleEl.style.margin = "0 0 8px 0";
+    titleEl.style.flex = "0 0 auto";
+
+    const body = contentEl.createDiv({ cls: "meeting-tools-preview" });
+    body.style.display = "block";
+    // Non-blocking render; safe to ignore the returned promise.
+    void MarkdownRenderer.renderMarkdown(this.content, body, "", this as any);
+
+    const btnRow = contentEl.createDiv({ cls: "meeting-tools-btn-row" });
+    const closeBtn = btnRow.createEl("button", {
+      text: t().btnClose,
+      cls: "mod-cta",
+    });
+    closeBtn.addEventListener("click", () => this.close());
+  }
+
+  onClose() {
+    this.contentEl.empty();
   }
 }
 
@@ -221,17 +267,18 @@ export class InsufficientTextModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    contentEl.createEl("h3", { text: "Texto insuficiente" });
+    const s = t();
+    contentEl.createEl("h3", { text: s.modalInsufficientTitle });
     contentEl.createEl("p", {
-      text: `Texto insuficiente para gerar sumário, mindmap ou lista de tarefas (${this.wordCount} palavras encontradas, mínimo ${this.minWords}).`,
+      text: s.modalInsufficientDesc(this.wordCount, this.minWords),
     });
 
     const btnRow = contentEl.createDiv({ cls: "meeting-tools-btn-row" });
 
-    btnRow.createEl("button", { text: "Cancelar" })
+    btnRow.createEl("button", { text: s.btnCancelPlain })
       .addEventListener("click", () => { this.doResolve(false); this.close(); });
 
-    btnRow.createEl("button", { text: "Abrir transcrição", cls: "mod-cta" })
+    btnRow.createEl("button", { text: s.modalOpenTranscript, cls: "mod-cta" })
       .addEventListener("click", () => { this.doResolve(true); this.close(); });
   }
 

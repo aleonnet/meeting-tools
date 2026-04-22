@@ -1,5 +1,6 @@
 import { App, TFile, MarkdownPostProcessorContext } from "obsidian";
 import type MeetingToolsPlugin from "./main";
+import { t } from "./i18n";
 
 interface MatchedNote {
   file: TFile;
@@ -81,7 +82,7 @@ export function registerMeetingHistory(plugin: MeetingToolsPlugin): void {
 
       if (matches.length === 0) {
         el.createEl("p", {
-          text: "Nenhuma daily note encontrada referenciando este projeto.",
+          text: t().emptyMeetingHistory,
           cls: "mt-dash-empty",
         });
         return;

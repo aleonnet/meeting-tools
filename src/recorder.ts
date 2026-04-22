@@ -2,6 +2,7 @@ import { MarkdownView, Notice } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import { ensureFolder } from "./file-utils";
 import { transcribeAudio } from "./transcribe";
+import { t } from "./i18n";
 
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
@@ -32,7 +33,7 @@ export function isRecording(): boolean {
 
 export async function startRecordingWithControls(plugin: MeetingToolsPlugin): Promise<void> {
   if (isRecording()) {
-    new Notice("Já existe uma gravação em andamento.");
+    new Notice(t().noticeRecordingInProgress);
     return;
   }
 
@@ -73,7 +74,7 @@ export async function startRecordingWithControls(plugin: MeetingToolsPlugin): Pr
       removeBanner();
 
       if (cancelled) {
-        new Notice("Gravação cancelada.");
+        new Notice(t().noticeRecordingCancelled);
         mediaRecorder = null;
         return;
       }
@@ -98,18 +99,18 @@ export async function startRecordingWithControls(plugin: MeetingToolsPlugin): Pr
 
       const duration = formatDuration(getElapsed());
       const sizeKB = Math.round(arrayBuf.byteLength / 1024);
-      new Notice(`Gravação salva: ${fileName} (${duration}, ${sizeKB}KB)`);
+      new Notice(t().noticeRecordingSaved(fileName, duration, sizeKB));
 
       mediaRecorder = null;
 
-      new Notice("Iniciando transcrição automática…");
+      new Notice(t().noticeStartAutoTranscribe);
       try {
         const result = await transcribeAudio(plugin, filePath);
         if (result) {
-          new Notice("Transcrição completa: " + (result.mdPath || result.srtPath));
+          new Notice(t().noticeTranscribeComplete(result.mdPath || result.srtPath));
         }
       } catch (e: any) {
-        new Notice("Erro na transcrição: " + e.message);
+        new Notice(t().noticeTranscribeError(e.message));
         console.error("[MeetingTools] Auto-transcribe error:", e);
       }
     };
@@ -120,9 +121,9 @@ export async function startRecordingWithControls(plugin: MeetingToolsPlugin): Pr
     showBanner(plugin);
     startTimer();
 
-    new Notice("🔴 Gravação iniciada");
+    new Notice(t().noticeRecordingStarted);
   } catch (e: any) {
-    new Notice("Erro ao iniciar gravação: " + e.message);
+    new Notice(t().noticeRecordingError(e.message));
     console.error("[MeetingTools] Recording error:", e);
   }
 }
@@ -138,34 +139,40 @@ function showBanner(plugin: MeetingToolsPlugin): void {
   bannerEl = document.createElement("div");
   bannerEl.className = "mt-record-banner";
 
+  const s = t();
+  const destLine = document.createElement("span");
+  destLine.className = "mt-record-dest";
+  destLine.textContent = s.recordSavingTo(plugin.settings.audioDir);
+  bannerEl.appendChild(destLine);
+
   const timerSpan = document.createElement("span");
   timerSpan.className = "mt-record-timer";
-  timerSpan.textContent = "🔴 Gravando 00:00";
+  timerSpan.textContent = s.recordTimerRecording("00:00");
   bannerEl.appendChild(timerSpan);
 
   const btnRow = document.createElement("div");
   btnRow.className = "mt-record-buttons";
 
   const pauseBtn = document.createElement("button");
-  pauseBtn.textContent = "⏸ Pausar";
+  pauseBtn.textContent = s.btnPause;
   pauseBtn.className = "mt-record-btn";
   pauseBtn.addEventListener("click", () => {
     if (!mediaRecorder) return;
     if (mediaRecorder.state === "recording") {
       mediaRecorder.pause();
       pauseStartTime = Date.now();
-      pauseBtn.textContent = "▶ Retomar";
-      timerSpan.textContent = `⏸ Pausado ${formatDuration(getElapsed())}`;
+      pauseBtn.textContent = s.btnResume;
+      timerSpan.textContent = s.recordTimerPaused(formatDuration(getElapsed()));
     } else if (mediaRecorder.state === "paused") {
       pausedDuration += Date.now() - pauseStartTime;
       pauseStartTime = 0;
       mediaRecorder.resume();
-      pauseBtn.textContent = "⏸ Pausar";
+      pauseBtn.textContent = s.btnPause;
     }
   });
 
   const stopBtn = document.createElement("button");
-  stopBtn.textContent = "⏹ Parar";
+  stopBtn.textContent = s.btnStop;
   stopBtn.className = "mt-record-btn mt-record-btn-stop";
   stopBtn.addEventListener("click", () => {
     if (!mediaRecorder) return;
@@ -174,7 +181,7 @@ function showBanner(plugin: MeetingToolsPlugin): void {
   });
 
   const cancelBtn = document.createElement("button");
-  cancelBtn.textContent = "✕ Cancelar";
+  cancelBtn.textContent = s.btnCancel;
   cancelBtn.className = "mt-record-btn mt-record-btn-cancel";
   cancelBtn.addEventListener("click", () => {
     if (!mediaRecorder) return;
@@ -202,7 +209,7 @@ function updateBannerTimer(): void {
   const timerSpan = bannerEl.querySelector(".mt-record-timer");
   if (!timerSpan) return;
   if (mediaRecorder.state === "recording") {
-    timerSpan.textContent = `🔴 Gravando ${formatDuration(getElapsed())}`;
+    timerSpan.textContent = t().recordTimerRecording(formatDuration(getElapsed()));
   }
 }
 

@@ -1,4 +1,36 @@
-import { App, MarkdownView, Plugin, TFile, TFolder } from "obsidian";
+import { App, MarkdownView, Notice, Plugin, TFile, TFolder } from "obsidian";
+import { t } from "./i18n";
+
+/**
+ * Shows an actionable Notice when the OpenAI API key is missing. Adds an
+ * "Open Settings" button that navigates the user directly to the plugin's
+ * settings tab. Uses Obsidian's internal `app.setting` API (undocumented but
+ * widely used across community plugins).
+ */
+export function showApiKeyMissingNotice(plugin: Plugin): void {
+  const s = t();
+  const notice = new Notice("", 0);
+  const el = notice.noticeEl;
+  el.empty();
+  el.addClass("mt-missing-notice");
+  el.createEl("div", { text: s.noticeConfigureApiKey });
+
+  const btnRow = el.createDiv({ cls: "mt-notice-btn-row" });
+  const openBtn = btnRow.createEl("button", {
+    text: s.btnOpenSettings,
+    cls: "mod-cta",
+  });
+  openBtn.addEventListener("click", () => {
+    notice.hide();
+    const setting = (plugin.app as any).setting;
+    if (setting?.open) {
+      setting.open();
+      setting.openTabById?.(plugin.manifest.id);
+    }
+  });
+  const dismissBtn = btnRow.createEl("button", { text: s.btnDismiss });
+  dismissBtn.addEventListener("click", () => notice.hide());
+}
 
 /**
  * Detects audio duration via HTML5 <audio> element. Works in Electron (desktop)
@@ -100,19 +132,20 @@ export async function showCursorBanner(app: App): Promise<boolean> {
     const banner = document.createElement("div");
     banner.className = "mt-insert-banner";
 
+    const s = t();
     const msg = document.createElement("span");
-    msg.textContent = "📌 Posicione o cursor no local de inserção";
+    msg.textContent = s.cursorBannerMessage;
     banner.appendChild(msg);
 
     const btnRow = document.createElement("div");
     btnRow.className = "mt-insert-banner-buttons";
 
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Cancelar";
+    cancelBtn.textContent = s.btnCancelPlain;
     cancelBtn.className = "mt-insert-cancel";
 
     const confirmBtn = document.createElement("button");
-    confirmBtn.textContent = "Continuar";
+    confirmBtn.textContent = s.btnContinue;
     confirmBtn.className = "mt-insert-confirm";
 
     btnRow.appendChild(cancelBtn);
@@ -376,15 +409,16 @@ export async function withStatusFeedback<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   const el = plugin.addStatusBarItem();
-  el.setText(`⏳ ${label}`);
+  const s = t();
+  el.setText(s.statusRunning(label));
   el.style.fontWeight = "600";
   try {
     const result = await fn();
-    el.setText(`✅ ${label} — concluído`);
+    el.setText(s.statusDone(label));
     setTimeout(() => el.remove(), 3000);
     return result;
   } catch (e) {
-    el.setText(`❌ ${label} — erro`);
+    el.setText(s.statusError(label));
     setTimeout(() => el.remove(), 5000);
     throw e;
   }

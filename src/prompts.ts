@@ -1,115 +1,109 @@
-export function summaryPrompt(userName: string): string {
-  return `
-Você é um(a) assistente executivo(a) com 20+ anos.
-TRANSFORME a transcrição em notas, em PT-BR, seguindo exatamente o formato:
+// Shared task format used by Summary section 2 and Extract Tasks command.
+// Single source of truth for the checkbox format consumed by task-parser.ts
+// (meeting-tasks / meeting-kanban / meeting-gantt dashboards).
+//
+// Meeting wikilinks and the project tag are provided in a dynamic "Context"
+// preamble that the callers prepend (see buildTaskContextPreamble in
+// task-context.ts). The spec below references that Context.
+export const TASK_FORMAT_SPEC = `Format each action item EXACTLY like this (one per line):
 
-**[Título/Assunto da Reunião]**
-**Data:** [Inserir Data]
-**Participantes:** [Lista de Participantes]
+- [ ] [clear, objective description] [resource:: [owner name]] [priority:: [high/medium/low]] #task <project tag from Context> <meeting wikilinks from Context> 📅 [YYYY-MM-DD]
 
-## 1. Resumo Executivo
-- Visão concisa do propósito, principais tópicos e resultados.
+Rules:
+- Include only tasks with an explicit owner named in the text (third-person reference, e.g. "Roger will send...", "Patrícia will write..."). If a statement uses collective forms ("we", "a gente", "let's") or has no clearly identified owner, OMIT the task.
+- Do NOT attribute ambiguous or collective statements to the User name from Context. The User name is informational only.
+- If an explicit deadline is present, use 📅 YYYY-MM-DD. If not, omit 📅.
+- priority: "high" for urgent/critical, "medium" for normal, "low" for nice-to-have. If unclear, use "medium".
+- Apply the "Meeting wikilinks" from Context to EVERY task, exactly as written (including document extensions like .pptx).
+- If "Project tag" is present in Context, apply it to EVERY task. If not present, omit the #projects/ tag.
+- Do not invent information not in the text.
+- If no action item qualifies under the rules above (everything is collective or lacks a named owner), output exactly "_(no action items identified)_" instead of any bullet list. Translate the marker into the output language when appropriate.`;
 
-## 2. Principais Itens de Ação/Compromissos para ${userName}
-- **[Tarefa]**  [Detalhes, Responsável, Prazo]
-- **[Tarefa]**  [Detalhes, Responsável, Prazo]
-
-## 3. Detalhamento por Tópico
-### Tópico 1: [Nome]
-- Resumo dos pontos discutidos
-- Decisões tomadas
-- Itens de ação/compromissos e responsáveis
-
-### Tópico 2: [Nome]
-- (repita conforme necessário)
-
-REGRAS:
-- NÃO invente (se faltar algo, escreva literalmente "Não mencionado").
-- Identifique participantes a partir da transcrição, se houver; caso contrário, "Não mencionado".
-- Itens de ação só quando houver responsável/prazo explícitos.
-- Tom profissional, claro e objetivo. Use marcadores e negrito nos cabeçalhos.`.trim();
-}
+// Summary Template default content lives in src/vault-templates.ts
+// (LOCALIZED_ARTIFACTS entry id "summary-template") with both EN and PT-BR
+// versions. Placeholders consumed by src/summarize.ts:
+//   {{language_instruction}} — injected from settings.outputLanguage
+//   {{user_name}}           — from settings.userName
+//   {{task_context}}        — Context preamble (user name, wikilinks, project tag)
+//   {{task_format_spec}}    — shared TASK_FORMAT_SPEC above
+//   {{transcript}}          — the transcript text
 
 export const MINDMAP_PROMPT = `
-Converta a reunião em um diagrama Mermaid mindmap. Saída = APENAS um bloco de código:
-- Deve começar com \`\`\`mermaid e a 1ª linha interna deve ser exatamente "mindmap".
-- Indente com 2 espaços por nível. Um item por linha. Seja conciso.
-- NUNCA use colchetes [ ] nem parênteses ( ) nos rótulos.
-- NUNCA use dois-pontos ":" em rótulos; use " - " em vez disso.
-- Use texto simples (sem Markdown dentro dos rótulos).
+Convert the meeting into a Mermaid mindmap diagram. Output = ONLY a code block:
+- Must start with \`\`\`mermaid and the 1st inner line must be exactly "mindmap".
+- Line 2 is the root — a short meeting identifier (not a document section).
+- Use 6 to 12 THEMATIC top-level branches under the root (e.g. "Contracts", "Systems", "Risks", "Timeline", "People"). Mermaid auto-colors each top-level branch, so more distinct themes = more visual differentiation.
+- NEVER use document-structure labels as branches. Forbidden: "Executive Summary", "Action Items", "Detailed Topics", "Participants", "Summary", "Outcomes". Decompose thematically by subject matter discussed in the meeting.
+- If the input is already a structured summary, IGNORE its section layout and RE-ORGANIZE by theme.
+- Group related leaves under the thematic branch that best fits (e.g. a task about a contract goes under "Contracts", not a generic "Action Items" branch).
+- Indent with 2 spaces per level. One item per line. Be concise.
+- NEVER use square brackets [ ] or parentheses ( ) in labels.
+- NEVER use colons ":" in labels; use " - " instead.
+- Use plain text (no Markdown inside labels).
 
-Exemplo mínimo:
+Minimal example:
 \`\`\`mermaid
 mindmap
-  Reunião
-    Tópicos
-      Contratos
-        Revisão de contratos
-    Decisões
-      Atualizar processo
-    Itens de ação
-      Verificar uploads - Nitesh - Hoje
-    Riscos
-      Faturas ausentes no SAP
+  Meeting
+    Contracts
+      Review status
+      Deadlines
+    Systems
+      SAP migration
+      Licenses
+    Risks
+      Missing invoices
 \`\`\``.trim();
 
 export const EXTRACT_TASKS_PROMPT = `
-Extraia TODOS os itens de ação/compromissos do texto abaixo.
-Para cada item, formate EXATAMENTE assim (uma task por linha):
+Extract ALL action items / commitments from the text below.
 
-- [ ] [descrição clara e objetiva] [resource:: [nome do responsável]] [priority:: [high/medium/low]] #task #projects/[nome-do-projeto-em-lowercase] [[NOME_PROJETO]] 📅 [YYYY-MM-DD]
+{{task_context}}
 
-Onde NOME_PROJETO é o nome do projeto em formato de wikilink Obsidian (ex: [[Kaidô]], [[Twist]], [[TVCo]]).
+${TASK_FORMAT_SPEC}
 
-REGRAS:
-- Só inclua tasks com responsável explícito no texto.
-- Se houver prazo explícito, use 📅 YYYY-MM-DD. Se não houver prazo, omita o 📅.
-- Se o projeto estiver claro pelo contexto (mencionado no título, link [[Projeto]], ou tag #projects/), inclua AMBOS: a tag #projects/nome E o wikilink [[NomeProjeto]]. Se não estiver claro, omita ambos.
-- O wikilink deve usar o nome real do projeto com acentos (ex: [[Kaidô]], não [[Kaido]]).
-- priority: use "high" para urgente/crítico, "medium" para normal, "low" para nice-to-have. Se não estiver claro, use "medium".
-- NÃO invente informações ausentes no texto.
-- NÃO repita o texto inteiro, apenas as tasks extraídas.
-- Se não houver nenhum item de ação, responda exatamente: "Nenhum item de ação identificado."
+Additional rules:
+- DO NOT repeat the entire text, only the extracted tasks.
+- If no action items exist, respond exactly: "No action items identified."
 `.trim();
 
 export const NEW_PROJECT_PROMPT = `
-Você é um assistente executivo especializado em estruturação de projetos.
-Analise o documento abaixo e extraia as informações para preencher a nota do projeto.
+You are an executive assistant specialized in project structuring.
+Analyze the document below and extract the information to fill the project note.
 
-Responda EXATAMENTE neste formato markdown (preencha o que encontrar, deixe "[Não mencionado]" para o que não estiver no documento):
+Respond EXACTLY in this markdown format (fill what you find; use "[Not mentioned]" for anything not in the document):
 
-# [Nome do Projeto]
+# [Project Name]
 
-## Resumo Executivo
-> [Resumo conciso do projeto em 2-4 frases]
+## Executive Summary
+> [Concise 2-4 sentence summary]
 
-## Objetivos
-- [Objetivo 1]
-- [Objetivo 2]
-- [Continue conforme necessário]
+## Objectives
+- [Objective 1]
+- [Objective 2]
+- [Continue as needed]
 
 ## Workstreams
-### 1. [Nome da frente]
-- Responsável: [Nome ou "Não mencionado"]
-- Escopo: [Descrição]
+### 1. [Workstream name]
+- Owner: [Name or "Not mentioned"]
+- Scope: [Description]
 
-### 2. [Nome da frente]
-- Responsável: [Nome ou "Não mencionado"]
-- Escopo: [Descrição]
+### 2. [Workstream name]
+- Owner: [Name or "Not mentioned"]
+- Scope: [Description]
 
-[Continue conforme necessário]
+[Continue as needed]
 
 ## Timeline
-[Extraia datas, marcos e prazos mencionados. Se houver cronograma, descreva-o.]
+[Extract dates, milestones and deadlines. If a schedule is present, describe it.]
 
 ## Stakeholders
-| Papel | Nome |
-|-------|------|
-| [Papel] | [Nome] |
+| Role | Name |
+|------|------|
+| [Role] | [Name] |
 
-REGRAS:
-- Use PT-BR.
-- Seja factual — não invente informações ausentes.
-- Mantenha o formato markdown exatamente como especificado.
-- Se o documento for muito curto ou vago, preencha o que for possível e marque o resto como "[Não mencionado]".
+RULES:
+- Be factual — do not invent information that isn't in the document.
+- Keep the markdown format exactly as specified.
+- If the document is very short or vague, fill what you can and mark the rest as "[Not mentioned]".
 `.trim();

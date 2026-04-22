@@ -1,6 +1,7 @@
 import { Notice, Platform, TFile } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import { baseName, ensureFolder, saveArrayBufferToVault } from "./file-utils";
+import { t } from "./i18n";
 
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25MB
 
@@ -77,45 +78,42 @@ export async function importAudio(
   });
 
   if (!chosen) {
-    new Notice("Importação cancelada.");
+    new Notice(t().noticeImportCancelled);
     return null;
   }
 
   await ensureFolder(app, settings.audioDir);
   const buf = await chosen.arrayBuffer();
 
-  // If ≤25MB, save directly
   if (buf.byteLength <= WHISPER_MAX_BYTES) {
     const savedPath = await saveArrayBufferToVault(app, settings.audioDir, chosen.name, buf);
     const sizeKB = Math.round(buf.byteLength / 1024);
-    new Notice(`Áudio importado: ${savedPath} (${sizeKB}KB)`);
+    new Notice(t().noticeAudioImported(savedPath, sizeKB));
     return savedPath;
   }
 
-  // >25MB — need compression
   const originalMB = (buf.byteLength / (1024 * 1024)).toFixed(1);
 
   if (Platform.isMobile) {
-    new Notice(`Arquivo > 25MB (${originalMB}MB). Comprima no desktop antes de importar.`);
+    new Notice(t().noticeAudioTooLargeMobile(originalMB));
     return null;
   }
 
-  // Desktop: use ffmpeg
   const ffmpegPath = await findFfmpeg();
   if (!ffmpegPath) {
-    new Notice("ffmpeg não encontrado. Instale com: brew install ffmpeg (macOS) ou baixe em ffmpeg.org");
+    new Notice(t().noticeFfmpegMissing);
     return null;
   }
 
-  new Notice(`Áudio grande (${originalMB}MB). Comprimindo com ffmpeg…`);
+  new Notice(t().noticeLargeAudioCompressing(originalMB));
 
   // Save original to temp location in vault
   const tempPath = await saveArrayBufferToVault(app, settings.audioDir, chosen.name, buf);
 
   const vaultAbs = getVaultBasePath(app);
   if (!vaultAbs) {
-    new Notice("Não foi possível detectar o caminho do vault.");
-    return tempPath; // return uncompressed
+    new Notice(t().noticeVaultPathMissing);
+    return tempPath;
   }
 
   const srcAbs = `${vaultAbs}/${tempPath}`;
@@ -134,7 +132,7 @@ export async function importAudio(
 
   if (result.code !== 0) {
     console.error("[MeetingTools] ffmpeg error:", result.stderr);
-    new Notice("ffmpeg falhou. Usando arquivo original.");
+    new Notice(t().noticeFfmpegFailed);
     return tempPath;
   }
 
@@ -146,14 +144,13 @@ export async function importAudio(
 
   if (webmFile instanceof TFile) {
     const compressedMB = (webmFile.stat.size / (1024 * 1024)).toFixed(1);
-    new Notice(`Comprimido: ${originalMB}MB → ${compressedMB}MB`);
-    // Remove original, keep compressed
+    new Notice(t().noticeCompressed(originalMB, compressedMB));
     if (tempFile instanceof TFile && tempPath !== outRel) {
       await app.vault.trash(tempFile, true);
     }
     return outRel;
   }
 
-  new Notice("Arquivo comprimido não encontrado. Usando original.");
+  new Notice(t().noticeCompressedFileMissing);
   return tempPath;
 }
