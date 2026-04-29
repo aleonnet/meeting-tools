@@ -1,4 +1,4 @@
-import { Notice, TFile, TFolder, requestUrl } from "obsidian";
+import { Notice, TFile, TFolder } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import {
   ContextResult,
@@ -7,11 +7,16 @@ import {
   showApiKeyMissingNotice,
 } from "./file-utils";
 import { PreviewModal } from "./modals";
-import { EXTRACT_TASKS_PROMPT } from "./prompts";
-import { resolveLanguageInstruction, t } from "./i18n";
-import { buildTaskContextPreamble, detectMeetingContext } from "./task-context";
-import { parseOpenAIError } from "./openai-errors";
+import { t } from "./i18n";
+import { detectMeetingContext } from "./task-context";
+import { extractAndRenderTasks } from "./task-extractor";
 
+/**
+ * Resolves wikilinks in task output to existing project notes (case-insensitive,
+ * fuzzy match). Originally written for the free-text prompt, kept because the
+ * structured extractor still uses MeetingContext wikilinks verbatim and they
+ * may not match a project note's exact basename.
+ */
 function resolveProjectLinks(plugin: MeetingToolsPlugin, text: string): string {
   const app = plugin.app;
   const projectsFolder = app.vault.getAbstractFileByPath("Vault/Projects");
@@ -59,60 +64,22 @@ export async function extractTasks(
   new Notice(t().noticeExtractingTasks);
 
   const meetingContext = detectMeetingContext(plugin);
-  const taskContextPreamble = buildTaskContextPreamble(meetingContext);
-  const systemPrompt =
-    resolveLanguageInstruction(plugin.settings.outputLanguage) +
-    "\n\n" +
-    EXTRACT_TASKS_PROMPT.replace("{{task_context}}", taskContextPreamble);
 
-  let res;
+  let result: { markdown: string };
   try {
-    res = await requestUrl({
-      url: "https://api.openai.com/v1/chat/completions",
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: plugin.settings.tasksModel,
-        temperature: 0.0,
-        top_p: 1,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: inputContent },
-        ],
-      }),
-      throw: false,
-    });
-  } catch (e) {
-    const err = parseOpenAIError(null, e);
-    console.error("[MeetingTools] OpenAI network error:", err);
-    new Notice(err.friendly, 10000);
+    result = await extractAndRenderTasks(plugin, apiKey, inputContent, meetingContext);
+  } catch {
+    // extractAndRenderTasks already shows its own Notice on API/network errors.
     return;
   }
 
-  if (res.status >= 400 || res.json?.error) {
-    const err = parseOpenAIError({ status: res.status, json: res.json, text: res.text });
-    console.error("[MeetingTools] Extract tasks error:", err);
-    new Notice(err.friendly, 10000);
-    return;
-  }
-
-  let tasksText = res.json?.choices?.[0]?.message?.content ?? "";
-
-  // Empty-result detection. Matches the EN prompt wording and the previous PT-BR
-  // fallback in case the model sticks to legacy phrasing.
-  if (
-    !tasksText ||
-    /no action items identified/i.test(tasksText) ||
-    tasksText.includes("Nenhum item de ação identificado")
-  ) {
+  const isEmptyMarker = !result.markdown.includes("- [ ]");
+  if (isEmptyMarker) {
     new Notice(t().noticeNoTasksFound);
     return;
   }
 
-  tasksText = resolveProjectLinks(plugin, tasksText);
+  const tasksText = resolveProjectLinks(plugin, result.markdown);
 
   let finalText = tasksText;
   if (plugin.settings.showPreview) {
@@ -122,9 +89,9 @@ export async function extractTasks(
       tasksText
     );
     modal.open();
-    const result = await modal.waitForResult();
-    if (result === null) return;
-    finalText = result;
+    const previewResult = await modal.waitForResult();
+    if (previewResult === null) return;
+    finalText = previewResult;
   }
 
   const inserted = context

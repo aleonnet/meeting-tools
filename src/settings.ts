@@ -1,13 +1,17 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type MeetingToolsPlugin from "./main";
 import { t, type OutputLanguage } from "./i18n";
 
 const SECRET_ID = "meeting-tools-openai-key";
 
 export type TranscriptionModel =
-  | "auto"
   | "whisper-1"
   | "gpt-4o-transcribe-diarize";
+
+export const CHUNK_DURATION_MIN_BOUND = 1;
+export const CHUNK_DURATION_MAX_BOUND = 120;
+export const MIN_SILENCE_SEC_BOUND = { min: 0.5, max: 30 };
+export const SILENCE_THRESHOLD_DB_BOUND = { min: -80, max: -20 };
 
 export interface MeetingToolsSettings {
   openaiApiKey: string;
@@ -15,6 +19,9 @@ export interface MeetingToolsSettings {
   transcriptsDir: string;
   transcriptionModel: TranscriptionModel;
   chunkDurationMin: number;
+  removeSilence: boolean;
+  minSilenceSec: number;
+  silenceThresholdDb: number;
   summaryModel: string;
   tasksModel: string;
   mindmapModel: string;
@@ -34,8 +41,11 @@ export const DEFAULT_SETTINGS: MeetingToolsSettings = {
   openaiApiKey: "",
   audioDir: "Vault/Audios",
   transcriptsDir: "Vault/Transcripts",
-  transcriptionModel: "auto",
-  chunkDurationMin: 10,
+  transcriptionModel: "whisper-1",
+  chunkDurationMin: 30,
+  removeSilence: true,
+  minSilenceSec: 2,
+  silenceThresholdDb: -50,
   summaryModel: "gpt-4.1",
   tasksModel: "gpt-4.1",
   mindmapModel: "gpt-4.1",
@@ -88,6 +98,10 @@ export async function loadSettingsWithSecrets(
     DEFAULT_SETTINGS,
     await plugin.loadData()
   );
+  // Legacy "auto" mode removed; map to whisper-1 silently.
+  if ((settings.transcriptionModel as string) === "auto") {
+    settings.transcriptionModel = "whisper-1";
+  }
   if (migrateKeyToSecretStorage(plugin, settings)) {
     await plugin.saveData(settings);
   }
@@ -181,7 +195,6 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
       .setDesc(s.settingTranscriptionModelDesc)
       .addDropdown((drop) =>
         drop
-          .addOption("auto", "Auto")
           .addOption("whisper-1", "whisper-1")
           .addOption("gpt-4o-transcribe-diarize", "gpt-4o-transcribe-diarize")
           .setValue(this.plugin.settings.transcriptionModel)
@@ -199,10 +212,91 @@ export class MeetingToolsSettingTab extends PluginSettingTab {
           .setValue(String(this.plugin.settings.chunkDurationMin))
           .onChange(async (value) => {
             const n = parseInt(value, 10);
-            if (!isNaN(n) && n > 0) {
-              this.plugin.settings.chunkDurationMin = n;
-              await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+            if (isNaN(n)) return;
+            const clamped = Math.max(
+              CHUNK_DURATION_MIN_BOUND,
+              Math.min(CHUNK_DURATION_MAX_BOUND, n)
+            );
+            if (clamped !== n) {
+              new Notice(
+                t().noticeChunkDurationOutOfRange(
+                  CHUNK_DURATION_MIN_BOUND,
+                  CHUNK_DURATION_MAX_BOUND,
+                  clamped
+                )
+              );
+              text.setValue(String(clamped));
             }
+            this.plugin.settings.chunkDurationMin = clamped;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingRemoveSilenceName)
+      .setDesc(s.settingRemoveSilenceDesc)
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.removeSilence)
+          .onChange(async (value) => {
+            this.plugin.settings.removeSilence = value;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingMinSilenceSecName)
+      .setDesc(s.settingMinSilenceSecDesc)
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.minSilenceSec))
+          .onChange(async (value) => {
+            const n = parseFloat(value);
+            if (isNaN(n)) return;
+            const clamped = Math.max(
+              MIN_SILENCE_SEC_BOUND.min,
+              Math.min(MIN_SILENCE_SEC_BOUND.max, n)
+            );
+            if (clamped !== n) {
+              new Notice(
+                t().noticeSilenceSettingOutOfRange(
+                  MIN_SILENCE_SEC_BOUND.min,
+                  MIN_SILENCE_SEC_BOUND.max,
+                  clamped
+                )
+              );
+              text.setValue(String(clamped));
+            }
+            this.plugin.settings.minSilenceSec = clamped;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingSilenceThresholdDbName)
+      .setDesc(s.settingSilenceThresholdDbDesc)
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.silenceThresholdDb))
+          .onChange(async (value) => {
+            const n = parseFloat(value);
+            if (isNaN(n)) return;
+            const clamped = Math.max(
+              SILENCE_THRESHOLD_DB_BOUND.min,
+              Math.min(SILENCE_THRESHOLD_DB_BOUND.max, n)
+            );
+            if (clamped !== n) {
+              new Notice(
+                t().noticeSilenceSettingOutOfRange(
+                  SILENCE_THRESHOLD_DB_BOUND.min,
+                  SILENCE_THRESHOLD_DB_BOUND.max,
+                  clamped
+                )
+              );
+              text.setValue(String(clamped));
+            }
+            this.plugin.settings.silenceThresholdDb = clamped;
+            await saveSettingsWithSecrets(this.plugin, this.plugin.settings);
           })
       );
 

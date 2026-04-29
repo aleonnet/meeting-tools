@@ -1,8 +1,8 @@
 # Meeting Tools — Obsidian Plugin
 
-Workflow completo de reuniões e gestão de projetos: gravação de áudio nativa, transcrição (Whisper), resumo e mindmap (GPT), extração de tasks, criação de projetos a partir de documentos, Kanban board, Gantt timeline e dashboards de tasks.
+Workflow completo de reuniões e gestão de projetos: gravação de áudio nativa, transcrição, resumo e mindmap (GPT), extração de tasks, criação de projetos a partir de documentos, Kanban board, Gantt timeline e dashboards de tasks.
 
-**Desktop only** — usa MediaRecorder (gravação) e Node.js APIs (extração de PDF/PPTX).
+Funciona em desktop e mobile. Única operação desktop-only: extração automática de PDF/PPTX em **New Project from Document** (usa `pdftotext` via `poppler`). Em mobile, esse comando aceita TXT.
 
 ## Instalação
 
@@ -18,16 +18,16 @@ Acessíveis via `Cmd+P` ou pelo ícone briefcase no ribbon (sidebar esquerda):
 ### Áudio
 | Comando | Descrição |
 |---------|-----------|
-| **Start/Stop Recording** | Gravação nativa via MediaRecorder. Status bar mostra duração. Ao parar, salva o áudio e transcreve automaticamente via Whisper API. |
-| **Import Audio** | File picker nativo → salva no vault. Comprime via Web Audio API se >25MB. |
+| **Start/Stop Recording** | Gravação nativa via MediaRecorder. Status bar mostra duração. Ao parar, salva o áudio e transcreve automaticamente. |
+| **Import Audio** | File picker nativo → salva no vault. Re-encoda em Opus via WebCodecs se necessário. |
 
 ### Análise com IA
 | Comando | Descrição |
 |---------|-----------|
-| **Transcribe Audio** | Fuzzy search de áudios → Whisper API → salva `.srt` + `.md` (com player de áudio embutido) em Transcripts/ |
-| **Summarize Transcript** | Detecta contexto (seleção ou time block ≥ min words). Se insuficiente, oferece abrir transcrição. GPT gera resumo → preview editável → insere com `---` dentro do time block. |
+| **Transcribe Audio** | Fuzzy search de áudios → API de transcrição (whisper-1 ou gpt-4o-transcribe-diarize) → salva `.srt` + `.md` (com player de áudio embutido) em Transcripts/. VAD pré-processamento opcional remove silêncios prolongados. |
+| **Summarize Transcript** | Detecta contexto (seleção ou time block ≥ min words). Se insuficiente, oferece abrir transcrição. GPT gera resumo + tasks numa única chamada (json_schema strict) → preview editável → insere com `---` dentro do time block. |
 | **Generate Mindmap** | Mesma lógica de contexto. GPT gera Mermaid mindmap → preview → insere com `---` dentro do time block. |
-| **Extract Tasks** | Mesma lógica de contexto. GPT extrai tasks formatadas com `[resource::]`, `[priority::]`, `#task`, `#projects/`, `[[Projeto]]`, `📅`. Preview → insere com `---`. |
+| **Extract Tasks** | Mesma lógica de contexto. GPT extrai tasks via json_schema strict, com `evidence_quote` rastreável e `owner_type` (`person` / `team` / `unassigned`). Renderizadas como `- [ ] ... [resource::] [priority::] #task #projects/ [[Projeto]] 📅`. Preview → insere com `---`. |
 
 ### Projetos e Pipeline
 | Comando | Descrição |
@@ -160,8 +160,11 @@ Em Obsidian → Settings → Meeting Tools:
 | User Name | Nome nos resumos (itens de ação para [nome]) | Alessandro |
 | Audio Directory | Pasta para áudios | Vault/Audios |
 | Transcripts Directory | Pasta para transcrições | Vault/Transcripts |
-| Transcription Model | `auto` / `whisper-1` / `gpt-4o-transcribe-diarize` | auto |
-| Chunk duration (min) | Tamanho dos chunks em áudios longos | 10 |
+| Transcription Model | Modelo de transcrição. `whisper-1`: rápido e econômico, sem identificação de falantes. `gpt-4o-transcribe-diarize`: identifica falantes (Speaker 1/2/...). | whisper-1 |
+| Chunk duration (min) | Tamanho dos chunks em áudios longos. Aplicado também como threshold para chunking anti-alucinação no whisper-1. Range 1-120. | 30 |
+| Remove silences | VAD pré-processamento: detecta e remove silêncios antes de enviar | ✅ |
+| Min silence (s) | Duração mínima de silêncio para cortar. Range 0.5-30 | 2 |
+| Silence threshold (dB) | Energia abaixo da qual o áudio é considerado silêncio. Range -80 a -20 | -50 |
 | Summary Model | Modelo OpenAI para resumos e criação de projetos | gpt-4.1 |
 | Tasks Model | Modelo OpenAI para extração de tasks | gpt-4.1 |
 | Mindmap Model | Modelo OpenAI para mindmaps | gpt-4.1 |
@@ -185,9 +188,11 @@ A saída de IA é controlada pela setting **AI output language**:
 O prompt do Summarize vive em `Vault/Templates/Summary Template.md` (criado pelo Setup Vault). Edite livremente. Placeholders:
 - `{{language_instruction}}` — substituído pela setting de idioma acima
 - `{{user_name}}` — nome do usuário
-- `{{task_context}}` — preamble dinâmico com User name, wikilinks do time block header e tag `#projects/` (quando resolve). Compartilhado com Extract Tasks.
-- `{{task_format_spec}}` — spec de formato + regras das tasks (formato `- [ ] ... [resource::] #task ...` parseável pelos dashboards).
+- `{{task_context}}` — preamble dinâmico com User name, wikilinks do time block header e tag `#projects/` (quando resolve). Mantido para back-compat; com structured output, owner/projeto vêm do schema, mas o template ainda recebe o preamble como contexto adicional.
+- `{{action_items_block}}` — placeholder preservado verbatim pelo modelo na resposta. O código substitui por tasks renderizadas no formato `- [ ] ... [resource::] #task ...` parseável pelos dashboards.
 - `{{transcript}}` — o texto da transcrição (obrigatório manter)
+
+**Back-compat**: templates com o placeholder antigo `{{task_format_spec}}` continuam funcionando — `templates.ts:substitute()` mapeia automaticamente para `{{action_items_block}}`.
 
 ### Como o projeto é atribuído às tasks
 
@@ -204,8 +209,9 @@ Se o arquivo for deletado/renomeado, o comando cai automaticamente no template e
 
 ## Dependências
 
-- **OpenAI API Key** — para Whisper (transcrição) e GPT (resumo, mindmap, tasks, projeto)
-- **pdftotext** (opcional) — para extração de texto de PDFs. Instalado via `brew install poppler`. Fallback regex se ausente.
+- **OpenAI API Key** — para transcrição (whisper-1 ou gpt-4o-transcribe-diarize) e GPT (resumo, mindmap, tasks, projeto)
+- **pdftotext** (opcional, desktop) — para extração de texto de PDFs em **New Project from Document**. Instalado via `brew install poppler`. Fallback regex se ausente.
+- **webm-muxer** — dependência npm runtime, JS puro, ~20 KB no bundle. Usada pelo encoder Opus do chunking de transcrição.
 
 Nenhum outro plugin é necessário. Meeting Tools é 100% autossuficiente.
 
@@ -229,22 +235,28 @@ src/
 ├── main.ts            — Plugin class, comandos, ribbon menu
 ├── settings.ts        — Interface de settings + SettingTab + secretStorage
 ├── recorder.ts        — Gravação nativa via MediaRecorder + status bar
-├── transcribe.ts      — Whisper API → SRT + MD (com player embutido)
-├── summarize.ts       — GPT → resumo estruturado
+├── transcribe.ts      — API de transcrição (whisper-1/diarize) → SRT + MD. Inclui resolveMode (4 paths), bypass single-call, contexto entre chunks, expansão de timestamps via SilenceMap.
+├── audio-chunking.ts  — decode + slice + encodeOpus (WebCodecs) ou encodeWav16 (fallback). VAD: removeSilence + mapCompactToOriginal.
+├── summarize.ts       — 1 chamada com schema combinado (freeform_markdown + tasks). Substitui {{action_items_block}} no template.
+├── task-extractor.ts  — Schema strict + TASK_EXTRACTION_RULES + extractStructuredTasks + renderValidatedTasksAsMarkdown. Compartilhado por extract-tasks e summarize.
+├── task-context.ts    — detectMeetingContext + buildTaskContextPreamble (wikilinks + project tag a partir do header do time block).
 ├── mindmap.ts         — GPT → Mermaid mindmap
-├── extract-tasks.ts   — GPT → tasks formatadas + resolução de wikilinks
-├── new-project.ts     — PDF/PPTX/TXT → GPT → nota de projeto
-├── import-audio.ts    — File picker + compressão Web Audio API se >25MB
+├── extract-tasks.ts   — Comando standalone. Delega a task-extractor.ts. Resolução de wikilinks de projeto.
+├── new-project.ts     — PDF/PPTX/TXT → GPT → nota de projeto (PDF/PPTX desktop-only)
+├── import-audio.ts    — File picker + re-encode Opus via WebCodecs se necessário
 ├── task-parser.ts     — Parser compartilhado: ParsedTask, status/priority cycle, date edit
 ├── task-dashboard.ts  — Code block `meeting-tasks` (tabelas, CSV export)
 ├── kanban.ts          — Code block `meeting-kanban` (drag & drop)
 ├── gantt.ts           — Code block `meeting-gantt` (Mermaid Gantt + editor de datas)
 ├── meeting-history.ts — Code block `meeting-history` (daily notes por projeto)
 ├── vault-setup.ts     — Setup Vault: cria pastas, templates e dashboards
+├── vault-templates.ts — Conteúdo localizado dos artefatos do Setup Vault (EN + PT-BR)
+├── templates.ts       — loadTemplate + substitute (com back-compat de {{task_format_spec}} → {{action_items_block}})
 ├── file-icons.ts      — Ícones Lucide no file explorer para arquivos MT
 ├── file-utils.ts      — Helpers (context detection, cursor banner, status feedback)
 ├── modals.ts          — Suggest modals, PreviewModal, InsufficientTextModal
-└── prompts.ts         — System prompts (resumo, mindmap, extração, projeto)
+├── openai-errors.ts   — Parser de erros da API OpenAI
+└── prompts.ts         — System prompts (mindmap, projeto)
 ```
 
 ## Setup Vault — estrutura criada

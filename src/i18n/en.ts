@@ -36,7 +36,14 @@ export const EN = {
   noticeChunkFailed: (i: number) => `Chunk ${i} failed — continuing.`,
   noticeTranscribeFailed: (msg: string) => `Failed to generate transcription: ${msg}`,
   noticeFileExceedsLimit: (mb: string) =>
-    `File exceeds 25MB (${mb}MB). Enable chunking (auto mode).`,
+    `File exceeds 25MB (${mb}MB). Reduce Chunk duration in Settings.`,
+  noticeChunkDurationOutOfRange: (min: number, max: number, applied: number) =>
+    `Chunk duration outside ${min}-${max} min range. Adjusted to ${applied}.`,
+  noticeSilenceSettingOutOfRange: (min: number, max: number, applied: number) =>
+    `Value outside ${min}-${max} range. Adjusted to ${applied}.`,
+  noticeRemovingSilences: "Removing silences…",
+  noticeSilenceRemoved: (origSec: number, compactSec: number) =>
+    `Silences removed: ${origSec.toFixed(0)}s → ${compactSec.toFixed(0)}s.`,
   noticeSrtSaved: (path: string) => `SRT saved: ${path}`,
   noticeMdSaved: (path: string) => `MD saved: ${path}`,
   transcriptMdHeader: "# Transcript",
@@ -56,6 +63,8 @@ export const EN = {
   noticeExtractTasksFailed: "Failed to extract tasks.",
   noticeNoTasksFound: "No action items identified in the text.",
   noticeTasksInserted: "Tasks inserted.",
+  noticeTasksRejected: (count: number) =>
+    `${count} task(s) rejected by citation validation (owner or quote not found in transcript).`,
 
   noticeOperationCancelled: "Operation cancelled.",
   noticeDesktopOnlyExtract: "PDF/PPTX extraction requires desktop. Use a TXT file.",
@@ -135,9 +144,19 @@ export const EN = {
 
   settingTranscriptionModelName: "Transcription model",
   settingTranscriptionModelDesc:
-    "Auto picks diarize (with speakers, ≤ 23min) or whisper-1 (long audio).",
+    "whisper-1: fast and cheap, no speakers. gpt-4o-transcribe-diarize: identifies speakers (Speaker 1/2/…).",
   settingChunkDurationName: "Chunk duration (min)",
-  settingChunkDurationDesc: "Chunk size for long audio. Typical: 5-20.",
+  settingChunkDurationDesc:
+    "Chunk size for audio > 25 MB or (whisper) audio longer than this. Default 30 min, range 1-120.",
+  settingRemoveSilenceName: "Remove silences",
+  settingRemoveSilenceDesc:
+    "Detects and removes silent gaps before upload. Reduces hallucination in whisper-1 and cost in diarize. Requires decoding the audio (no bypass).",
+  settingMinSilenceSecName: "Min silence (s)",
+  settingMinSilenceSecDesc:
+    "Minimum silence duration to remove. Default 2 s, range 0.5-30.",
+  settingSilenceThresholdDbName: "Silence threshold (dB)",
+  settingSilenceThresholdDbDesc:
+    "Energy level below which audio is treated as silence. Default -50 dB, range -80 to -20 (more negative = more permissive).",
 
   settingSummaryModelName: "Summary model",
   settingSummaryModelDesc: "Model used for summaries and project notes.",

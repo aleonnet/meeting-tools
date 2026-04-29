@@ -9,10 +9,15 @@ import {
 } from "./file-utils";
 import {
   decodeAudioToBuffer,
+  encodeOpus,
   encodeWav16,
+  isOpusEncodingSupported,
+  mapCompactToOriginal,
+  removeSilence,
   sliceBufferToChunks,
+  type SilenceMap,
 } from "./audio-chunking";
-import type { TranscriptionModel } from "./settings";
+import type { MeetingToolsSettings, TranscriptionModel } from "./settings";
 import { t } from "./i18n";
 import { parseOpenAIError } from "./openai-errors";
 
@@ -30,12 +35,16 @@ const MIME_BY_EXT: Record<string, string> = {
 const WHISPER_HALLUCINATION_PROMPT =
   "The sentence may be cut off, do not make up words to fill in the rest of the sentence.";
 
-// Hard limit reported by gpt-4o-transcribe-diarize API in 2026-04-14:
-// "audio duration 4489.2 seconds is longer than 1400 seconds..."
-const DIARIZE_MAX_SEC = 1400;
-
-// 25MB limit is an OpenAI-wide constraint on the audio upload endpoint.
+// 25MB limit is an OpenAI-wide constraint on the audio upload endpoint,
+// applied uniformly to whisper-1, gpt-4o-transcribe, and gpt-4o-transcribe-diarize.
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+// Hard server-side cap reported by gpt-4o-transcribe-diarize:
+//   "audio duration 1828.44 seconds is longer than 1400 seconds which is the
+//    maximum for this model"
+// Confirmed empirically in 2026-04-27 — the limit applies even when
+// chunking_strategy=auto is sent (the OpenAI docs are misleading on this).
+const DIARIZE_MAX_SEC = 1400;
 
 export interface TranscribeResult {
   srtPath: string;
@@ -77,7 +86,26 @@ export async function transcribeAudio(
   const blob = new Blob([buf], { type: mime });
 
   const durationSec = await getAudioDurationSec(blob);
-  const mode = resolveMode(settings.transcriptionModel, durationSec);
+
+  // VAD pre-processing (optional). When enabled, we decode the audio once,
+  // strip silences > minSilenceSec, and use the compact buffer for everything
+  // downstream. The SilenceMap lets us expand SRT/diarize timestamps back to
+  // the original audio's timeline so the player stays in sync.
+  const vad = await maybePreprocessSilence(blob, settings, durationSec);
+
+  // Effective size/duration drive resolveMode. With VAD, we use the compact
+  // buffer's duration and a conservative Opus-bitrate size estimate.
+  const effectiveDurationSec = vad ? vad.buffer.duration : durationSec;
+  const effectiveSize = vad
+    ? estimateOpusBytes(vad.buffer)
+    : buf.byteLength;
+
+  const mode = resolveMode(
+    settings.transcriptionModel,
+    effectiveDurationSec,
+    effectiveSize,
+    settings.chunkDurationMin
+  );
 
   await ensureFolder(app, settings.transcriptsDir);
 
@@ -86,48 +114,51 @@ export async function transcribeAudio(
   let modelLabel: string;
 
   try {
-    if (mode === "whisper-chunked") {
+    if (mode === "whisper-single") {
+      modelLabel = "whisper-1";
+      new Notice(t().noticeTranscribingWith(modelLabel));
+      const uploadBlob = vad ? await encodeBufferToBlob(vad.buffer) : blob;
+      const uploadName = vad ? renameForVad(file.name) : file.name;
+      let srt = await postWhisper(apiKey, uploadBlob, uploadName);
+      if (vad) srt = expandSrtTimestamps(srt, vad.map);
+      srtText = srt;
+      mdBody = srtToPlainText(srtText) || t().transcriptEmptyMarker;
+    } else if (mode === "whisper-chunked") {
       modelLabel = "whisper-1 (chunked)";
       new Notice(t().noticeTranscribingWith(modelLabel));
       const result = await transcribeWhisperChunked(
-        plugin,
         apiKey,
         blob,
-        settings.chunkDurationMin
+        settings.chunkDurationMin,
+        vad?.buffer ?? null
       );
-      srtText = result.srt;
+      srtText = vad ? expandSrtTimestamps(result.srt, vad.map) : result.srt;
       mdBody = srtToPlainText(srtText) || t().transcriptEmptyMarker;
     } else if (mode === "diarize-single") {
       modelLabel = "gpt-4o-transcribe-diarize";
       new Notice(t().noticeTranscribingWith(modelLabel));
-      const json = await postDiarize(apiKey, blob, file.name);
+      const uploadBlob = vad ? await encodeBufferToBlob(vad.buffer) : blob;
+      const uploadName = vad ? renameForVad(file.name) : file.name;
+      let json = await postDiarize(apiKey, uploadBlob, uploadName);
+      if (vad) json = expandDiarizedTimestamps(json, vad.map);
       srtText = diarizedToSrt(json);
       mdBody = diarizedToMd(json) || "_(transcrição vazia)_";
-    } else if (mode === "diarize-chunked") {
+    } else {
+      // diarize-chunked: cap effective chunk at the server's 1400s limit
+      // (with 20s safety margin) regardless of the user's chunkDurationMin.
       modelLabel = "gpt-4o-transcribe-diarize (chunked)";
       new Notice(t().noticeTranscribingWith(modelLabel));
-      const merged = await transcribeDiarizeChunked(
-        plugin,
+      const userChunkSec = settings.chunkDurationMin * 60;
+      const effectiveChunkSec = Math.min(userChunkSec, DIARIZE_MAX_SEC - 20);
+      let merged = await transcribeDiarizeChunked(
         apiKey,
         blob,
-        settings.chunkDurationMin
+        effectiveChunkSec,
+        vad?.buffer ?? null
       );
+      if (vad) merged = expandDiarizedTimestamps(merged, vad.map);
       srtText = diarizedToSrt(merged);
       mdBody = diarizedToMd(merged) || "_(transcrição vazia)_";
-    } else {
-      // whisper-single: only used when user explicitly picks whisper-1 and
-      // file already fits a single call. For simplicity we still go through
-      // the chunked path (1 chunk) — guarantees consistent behavior.
-      modelLabel = "whisper-1";
-      new Notice(t().noticeTranscribingWith(modelLabel));
-      if (buf.byteLength > MAX_UPLOAD_BYTES) {
-        new Notice(
-          t().noticeFileExceedsLimit((buf.byteLength / 1024 / 1024).toFixed(1))
-        );
-        return null;
-      }
-      srtText = await postWhisper(apiKey, blob, file.name);
-      mdBody = srtToPlainText(srtText) || t().transcriptEmptyMarker;
     }
   } catch (e: any) {
     console.error("[MeetingTools] Transcription error:", e);
@@ -160,42 +191,137 @@ export async function transcribeAudio(
   return { srtPath, mdPath };
 }
 
+// --- VAD pre-processing ---
+
+interface VadResult {
+  buffer: AudioBuffer;
+  map: SilenceMap;
+}
+
+/**
+ * Decodes the audio and removes silences when settings.removeSilence is true.
+ * Returns null when the setting is off, signaling that the rest of the pipeline
+ * should use the original blob (and may bypass decode entirely for single-call
+ * uploads).
+ *
+ * Skips if the source is suspiciously short (< 2 × minSilenceSec) — there's
+ * nothing meaningful to cut and decoding adds latency for no gain.
+ */
+async function maybePreprocessSilence(
+  blob: Blob,
+  settings: MeetingToolsSettings,
+  durationSec: number | null
+): Promise<VadResult | null> {
+  if (!settings.removeSilence) return null;
+  if (durationSec != null && durationSec < settings.minSilenceSec * 2) {
+    return null;
+  }
+
+  new Notice(t().noticeRemovingSilences);
+  const fullBuffer = await decodeAudioToBuffer(blob, 16000);
+  const { buffer: compact, map } = removeSilence(
+    fullBuffer,
+    settings.minSilenceSec,
+    settings.silenceThresholdDb
+  );
+
+  const origSec = fullBuffer.duration;
+  const compactSec = compact.duration;
+  // Only notify when the cut is meaningful — small detection wobble shouldn't
+  // spam the user with "removed 0s" notices.
+  if (compactSec < origSec - 0.5) {
+    new Notice(t().noticeSilenceRemoved(origSec, compactSec));
+  }
+
+  return { buffer: compact, map };
+}
+
+/**
+ * Conservative size estimate for an Opus-encoded AudioBuffer at the encoder's
+ * default 24 kbps mono target, with 33% headroom for webm container overhead
+ * and bitrate spikes. Used by resolveMode to pick single-call vs chunked.
+ */
+function estimateOpusBytes(buffer: AudioBuffer): number {
+  return Math.ceil(buffer.duration * 4000);
+}
+
+/**
+ * Encodes an AudioBuffer to Opus/WebM (when WebCodecs is available) or WAV.
+ * Used both for single-call uploads after VAD and for chunked encoding.
+ */
+async function encodeBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
+  return isOpusEncodingSupported()
+    ? await encodeOpus(buffer)
+    : encodeWav16(buffer);
+}
+
+function renameForVad(originalName: string): string {
+  const dot = originalName.lastIndexOf(".");
+  const base = dot > 0 ? originalName.slice(0, dot) : originalName;
+  const ext = isOpusEncodingSupported() ? "webm" : "wav";
+  return `${base}-vad.${ext}`;
+}
+
 // --- mode resolution ---
 
 type Mode =
-  | "whisper-chunked"
   | "whisper-single"
+  | "whisper-chunked"
   | "diarize-single"
   | "diarize-chunked";
 
+/**
+ * Decides the transcription path based on model, source size, and source duration.
+ *
+ * - whisper-1 single-call when source ≤ 25 MB AND duration ≤ chunkDurationMin.
+ *   (Both conditions matter: even if the file fits, long audio gets chunked
+ *   client-side as anti-hallucination defense.)
+ * - whisper-1 chunked otherwise (size > 25 MB OR duration > chunkDurationMin).
+ * - diarize single-call when source ≤ 25 MB AND duration ≤ DIARIZE_MAX_SEC.
+ *   The server's chunking_strategy=auto does NOT bypass the 1400s server cap
+ *   (verified empirically), so we still need to chunk client-side for longer
+ *   audio.
+ * - diarize chunked when source > 25 MB OR duration > DIARIZE_MAX_SEC.
+ *
+ * When duration detection fails, assumes long (forces chunking) to be safe.
+ */
 function resolveMode(
   setting: TranscriptionModel,
-  durationSec: number | null
+  durationSec: number | null,
+  sizeBytes: number,
+  chunkDurationMin: number
 ): Mode {
-  // When duration detection fails, assume long to be safe (forces chunking).
   const duration = durationSec ?? Infinity;
+  const tooBig = sizeBytes > MAX_UPLOAD_BYTES;
 
-  if (setting === "whisper-1") return "whisper-chunked";
   if (setting === "gpt-4o-transcribe-diarize") {
-    return duration > DIARIZE_MAX_SEC ? "diarize-chunked" : "diarize-single";
+    const tooLongForDiarize = duration > DIARIZE_MAX_SEC;
+    return tooBig || tooLongForDiarize ? "diarize-chunked" : "diarize-single";
   }
-  // auto
-  return duration > DIARIZE_MAX_SEC ? "whisper-chunked" : "diarize-single";
+  // whisper-1
+  const tooLongForWhisper = duration > chunkDurationMin * 60;
+  return tooBig || tooLongForWhisper ? "whisper-chunked" : "whisper-single";
 }
 
-// --- whisper single-call (used for explicit whisper-1 override on short audio) ---
+// --- whisper single-call ---
 
 async function postWhisper(
   apiKey: string,
   blob: Blob,
-  fileName: string
+  fileName: string,
+  contextPrompt?: string
 ): Promise<string> {
   const form = new FormData();
   form.append("file", blob, fileName);
   form.append("model", "whisper-1");
   form.append("response_format", "srt");
   form.append("temperature", "0");
-  form.append("prompt", WHISPER_HALLUCINATION_PROMPT);
+  form.append(
+    "prompt",
+    contextPrompt
+      ? `${WHISPER_HALLUCINATION_PROMPT} ${contextPrompt}`
+      : WHISPER_HALLUCINATION_PROMPT
+  );
 
   let resp: Response;
   try {
@@ -223,20 +349,25 @@ async function postWhisper(
 // --- whisper chunked ---
 
 async function transcribeWhisperChunked(
-  plugin: MeetingToolsPlugin,
   apiKey: string,
   blob: Blob,
-  chunkDurationMin: number
+  chunkDurationMin: number,
+  preDecoded: AudioBuffer | null
 ): Promise<{ srt: string }> {
-  const chunks = await prepareChunks(blob, chunkDurationMin);
   const chunkSec = chunkDurationMin * 60;
+  const chunks = preDecoded
+    ? await chunksFromBuffer(preDecoded, chunkSec)
+    : await prepareChunks(blob, chunkDurationMin);
+  const ext = chunks[0].type.includes("wav") ? "wav" : "webm";
   const srts: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     new Notice(t().noticeTranscribingChunk(i + 1, chunks.length));
+    const contextPrompt =
+      i > 0 ? lastSentencesFromSrt(srts[i - 1], 2) : undefined;
     try {
       const srt = await postWithRetry(async () =>
-        postWhisper(apiKey, chunks[i], `chunk-${i + 1}.wav`)
+        postWhisper(apiKey, chunks[i], `chunk-${i + 1}.${ext}`, contextPrompt)
       );
       srts.push(srt);
     } catch (e: any) {
@@ -291,13 +422,15 @@ async function postDiarize(
 }
 
 async function transcribeDiarizeChunked(
-  plugin: MeetingToolsPlugin,
   apiKey: string,
   blob: Blob,
-  chunkDurationMin: number
+  chunkSec: number,
+  preDecoded: AudioBuffer | null
 ): Promise<DiarizedResponse> {
-  const chunks = await prepareChunks(blob, chunkDurationMin);
-  const chunkSec = chunkDurationMin * 60;
+  const chunks = preDecoded
+    ? await chunksFromBuffer(preDecoded, chunkSec)
+    : await prepareChunksBySeconds(blob, chunkSec);
+  const ext = chunks[0].type.includes("wav") ? "wav" : "webm";
   const allSegments: DiarizedSegment[] = [];
   let fullText = "";
 
@@ -305,7 +438,7 @@ async function transcribeDiarizeChunked(
     new Notice(t().noticeTranscribingChunk(i + 1, chunks.length));
     try {
       const json = await postWithRetry(async () =>
-        postDiarize(apiKey, chunks[i], `chunk-${i + 1}.wav`)
+        postDiarize(apiKey, chunks[i], `chunk-${i + 1}.${ext}`)
       );
       const offset = i * chunkSec;
       for (const seg of json.segments ?? []) {
@@ -334,21 +467,54 @@ async function transcribeDiarizeChunked(
 
 // --- chunking pipeline ---
 
+/**
+ * Decodes blob to PCM, slices into chunkDurationMin segments, and encodes each
+ * as Opus/WebM (preferred, ~180 KB/min) or WAV (fallback, ~1.83 MB/min).
+ *
+ * Throws if any encoded chunk exceeds 25 MB. With Opus that requires very long
+ * chunks (>2h at 24 kbps); with WAV fallback it caps around 13 min.
+ */
 async function prepareChunks(
   blob: Blob,
   chunkDurationMin: number
 ): Promise<Blob[]> {
+  return prepareChunksBySeconds(blob, chunkDurationMin * 60);
+}
+
+async function prepareChunksBySeconds(
+  blob: Blob,
+  chunkSec: number
+): Promise<Blob[]> {
   const buffer = await decodeAudioToBuffer(blob, 16000);
-  const audioChunks = sliceBufferToChunks(buffer, chunkDurationMin * 60);
-  const wavChunks = audioChunks.map((b) => encodeWav16(b));
-  for (const w of wavChunks) {
+  return chunksFromBuffer(buffer, chunkSec);
+}
+
+/**
+ * Slices a pre-decoded AudioBuffer into chunks and encodes each one for upload.
+ * Used both by the original-blob path (after internal decode) and by the VAD
+ * path, which already holds the compact buffer in memory.
+ */
+async function chunksFromBuffer(
+  buffer: AudioBuffer,
+  chunkSec: number
+): Promise<Blob[]> {
+  const audioChunks = sliceBufferToChunks(buffer, chunkSec);
+  const useOpus = isOpusEncodingSupported();
+  const encoded: Blob[] = [];
+  for (const c of audioChunks) {
+    encoded.push(useOpus ? await encodeOpus(c) : encodeWav16(c));
+  }
+
+  for (const w of encoded) {
     if (w.size > MAX_UPLOAD_BYTES) {
-      throw new Error(
-        `Chunk excede 25MB (${(w.size / 1024 / 1024).toFixed(1)}MB). Reduza Chunk duration.`
-      );
+      const sizeMb = (w.size / 1024 / 1024).toFixed(1);
+      const advice = useOpus
+        ? "Reduza Chunk duration."
+        : "WebCodecs Opus indisponível neste ambiente; usando WAV (~1.83 MB/min). Reduza Chunk duration para ≤ 12 min.";
+      throw new Error(`Chunk excede 25 MB (${sizeMb} MB). ${advice}`);
     }
   }
-  return wavChunks;
+  return encoded;
 }
 
 async function postWithRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -390,6 +556,73 @@ function pad3(n: number): string {
 }
 
 /**
+ * Walks an SRT and shifts every timestamp from the compact (post-VAD) timeline
+ * back to the original audio's timeline using the SilenceMap. Leaves the body
+ * text untouched. No-op when the map has no cuts.
+ */
+export function expandSrtTimestamps(srt: string, map: SilenceMap): string {
+  if (map.cuts.length === 0) return srt;
+  return srt
+    .replace(/\r/g, "")
+    .split(/\n\n+/)
+    .map((entry) => {
+      const lines = entry.split("\n");
+      let i = 0;
+      if (/^\d+$/.test((lines[0] ?? "").trim())) i = 1;
+      const tm = (lines[i] ?? "").match(
+        /^(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})(.*)$/
+      );
+      if (!tm) return entry;
+      const start = mapCompactToOriginal(parseSrtTime(tm[1]), map);
+      const end = mapCompactToOriginal(parseSrtTime(tm[2]), map);
+      lines[i] = `${formatSrtTime(start)} --> ${formatSrtTime(end)}${tm[3]}`;
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+/**
+ * Same as expandSrtTimestamps but operates on a DiarizedResponse — shifts
+ * each segment's start/end while preserving text and speaker labels.
+ */
+function expandDiarizedTimestamps(
+  json: DiarizedResponse,
+  map: SilenceMap
+): DiarizedResponse {
+  if (map.cuts.length === 0) return json;
+  return {
+    ...json,
+    segments: (json.segments ?? []).map((seg) => ({
+      ...seg,
+      start: mapCompactToOriginal(seg.start, map),
+      end: mapCompactToOriginal(seg.end, map),
+    })),
+  };
+}
+
+/**
+ * Returns the last `count` sentences from an SRT, joined with spaces.
+ * Used as Whisper context prompt to bridge chunk boundaries — improves
+ * continuity and reduces speaker/topic confusion at the cut.
+ */
+function lastSentencesFromSrt(srt: string, count: number): string {
+  const text = srt
+    .replace(/\r/g, "")
+    .split(/\n\n+/)
+    .map((entry) => {
+      const lines = entry.split("\n");
+      let i = 0;
+      if (/^\d+$/.test((lines[0] ?? "").trim())) i = 1;
+      if (/-->/.test(lines[i] ?? "")) i++;
+      return lines.slice(i).join(" ").trim();
+    })
+    .filter(Boolean)
+    .join(" ");
+  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  return sentences.slice(-count).join(" ").trim().slice(0, 800);
+}
+
+/**
  * Merges SRT texts from sequential chunks. Offsets each chunk's timestamps
  * by `i * chunkSec` and renumbers entries globally.
  */
@@ -405,7 +638,6 @@ export function mergeSrts(srts: string[], chunkSec: number): string {
     for (const entry of entries) {
       const lines = entry.split("\n");
       if (lines.length < 2) continue;
-      // Detect format: "N\nHH:MM:SS,mmm --> ..." or missing index
       let timeLineIdx = 0;
       if (/^\d+$/.test(lines[0].trim())) timeLineIdx = 1;
       const timeLine = lines[timeLineIdx];

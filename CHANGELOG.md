@@ -1,5 +1,43 @@
 # Changelog
 
+## [2.3.0] - 2026-04-29
+
+### Pipeline de transcrição
+- **VAD (Voice Activity Detection) pré-processamento**: algoritmo energy-based (RMS por janela de 20ms) detecta silêncios maiores que `minSilenceSec` abaixo de `silenceThresholdDb` e os remove, preservando 0.2s de margem em cada borda. Mantém sincronia com o áudio original via `SilenceMap`: timestamps no SRT/diarize são expandidos de volta ao timeline original (player do Obsidian pula para o ponto certo do `.webm`). Implementado em `src/audio-chunking.ts` (`removeSilence`, `mapCompactToOriginal`).
+- **Encoder Opus** via `WebCodecs.AudioEncoder` + `webm-muxer` substitui o encoder WAV PCM no chunking client-side. ~180 KB/min @ 24 kbps mono (vs ~1.83 MB/min do WAV). Fallback para `encodeWav16` quando WebCodecs indisponível (`isOpusEncodingSupported`).
+- **Bypass single-call sem decode**: quando o source comprimido cabe em 25 MB E a duração ≤ `chunkDurationMin`, envia o blob original direto à API sem decodificar. Antes, todo whisper-1 era forçado a chunked.
+- **Resolve mode por size + duration**: novo `resolveMode(setting, durationSec, sizeBytes, chunkDurationMin)` retorna 4 modos (`whisper-single`, `whisper-chunked`, `diarize-single`, `diarize-chunked`).
+- **Cap server-side de 1400s do diarize** (`DIARIZE_MAX_SEC`) respeitado mesmo com `chunking_strategy: "auto"` enviado — confirmado empiricamente em 2026-04-27 que o cap se aplica.
+- **Contexto entre chunks no whisper-1**: prompt do chunk N+1 inclui as últimas 2 sentenças do chunk N (`lastSentencesFromSrt`) além do `WHISPER_HALLUCINATION_PROMPT`.
+
+### Settings
+- Removida opção `auto` de `transcriptionModel`. Default agora `whisper-1`. Migração silenciosa de instalações com `auto` salvo (mapeado para `whisper-1` em `loadSettingsWithSecrets`).
+- `chunkDurationMin` default 10 → **30 min**, com clamp 1-120 e Notice (`noticeChunkDurationOutOfRange`).
+- Novos settings VAD: `removeSilence` (default `true`), `minSilenceSec` (default `2`, range 0.5-30), `silenceThresholdDb` (default `-50`, range -80 a -20).
+
+### Extração de tasks (refator)
+- Novo módulo `src/task-extractor.ts` consolida a lógica antes em `extract-tasks.ts` + `prompts.ts`. Exporta `TASK_ITEM_SCHEMA`, `TASK_EXTRACTION_RULES`, `extractStructuredTasks`, `renderValidatedTasksAsMarkdown`, `extractAndRenderTasks`.
+- **Structured Output** via `response_format: { type: "json_schema", strict: true }` da OpenAI. Formato garantido pelo servidor.
+- **Schema com `owner_type`**: `person | team | unassigned`. Aceita áreas/times ("Time trabalhista", "RH / TI / LG") e ações com responsável a definir (`TBD`), além de pessoas nomeadas.
+- **`evidence_quote` por task**: cada task carrega o trecho verbatim da transcrição que a justifica.
+- Removidos `TASK_FORMAT_SPEC` e `EXTRACT_TASKS_PROMPT` de `src/prompts.ts` (legacy free-text). Re-export em `vault-templates.ts` também removido.
+
+### Summary (1 chamada combinada)
+- **Uma única chamada** retorna `{ freeform_markdown, tasks }` em paralelo, com mesmo schema e regras do Extract Tasks standalone (single source of truth).
+- Novo placeholder `{{action_items_block}}` no template do summary: o modelo preserva o token literal; o código substitui pelo markdown das tasks renderizadas após a chamada (`injectActionItems`).
+- **Back-compat silencioso**: templates customizados com `{{task_format_spec}}` continuam funcionando — `templates.ts:substitute()` mapeia automaticamente para `{{action_items_block}}`.
+
+### i18n
+- Mensagens novas (PT-BR + EN): `noticeChunkDurationOutOfRange`, `noticeSilenceSettingOutOfRange`, `noticeRemovingSilences`, `noticeSilenceRemoved`, `noticeTasksRejected`.
+- Settings UI novas: `settingRemoveSilenceName/Desc`, `settingMinSilenceSecName/Desc`, `settingSilenceThresholdDbName/Desc`.
+
+### Dependências
+- `webm-muxer@^5.1.4` adicionado (~20 KB no bundle).
+
+### Bug fixes
+- Cast `as any` em `modals.ts:173` para `MarkdownRenderer.renderMarkdown` (alinha com `GuideModal:231`; resolve mismatch dos types do `obsidian` package).
+- `tsconfig.json` ganha `skipLibCheck: true` (evita conflito com `@types/dom-webcodecs` introduzido transitivamente por `webm-muxer`).
+
 ## [2.2.0] - 2026-04-15
 
 ### Adicionado

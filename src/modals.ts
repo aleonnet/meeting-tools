@@ -170,7 +170,7 @@ export class PreviewModal extends Modal {
         previewBtn.textContent = s.modalEdit;
         showingPreview = true;
         previewDiv.empty();
-        await MarkdownRenderer.renderMarkdown(this.content, previewDiv, "", this);
+        await MarkdownRenderer.renderMarkdown(this.content, previewDiv, "", this as any);
       } else {
         textarea.value = this.content;
         previewDiv.style.display = "none";

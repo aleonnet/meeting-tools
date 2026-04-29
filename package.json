@@ -1,6 +1,6 @@
 {
   "name": "meeting-tools",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Complete meeting workflow for Obsidian: recording, transcription, AI summarization, task management, Kanban, Gantt",
   "main": "main.js",
   "scripts": {
@@ -12,5 +12,8 @@
     "esbuild": "^0.21.0",
     "obsidian": "latest",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "webm-muxer": "^5.1.4"
   }
 }

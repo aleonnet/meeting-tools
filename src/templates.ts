@@ -31,9 +31,15 @@ export async function loadTemplate(
 /**
  * Substitutes `{{key}}` occurrences in `tpl` using values from `vars`.
  * Unknown placeholders are left intact so users can include literal `{{…}}`.
+ *
+ * Back-compat: legacy summary templates used `{{task_format_spec}}` to mark
+ * where action items should appear. The new architecture uses
+ * `{{action_items_block}}`. Map the old token to the new one transparently
+ * so users with custom templates don't see broken output.
  */
 export function substitute(tpl: string, vars: Record<string, string>): string {
-  return tpl.replace(/\{\{(\w+)\}\}/g, (match, key) =>
+  const migrated = tpl.replace(/\{\{task_format_spec\}\}/g, "{{action_items_block}}");
+  return migrated.replace(/\{\{(\w+)\}\}/g, (match, key) =>
     Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match
   );
 }

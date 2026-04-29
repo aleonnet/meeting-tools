@@ -1,5 +1,4 @@
 import { getLocale } from "./i18n";
-import { TASK_FORMAT_SPEC } from "./prompts";
 
 // Filenames are canonical (EN) and stable across locales. Only the CONTENT of
 // each artifact is localized. Legacy PT-BR paths are kept here only for
@@ -21,17 +20,13 @@ Transform the transcript below into meeting notes, following this exact format:
 - Concise view of purpose, main topics and outcomes.
 
 ## 2. Action Items
-Extract ALL action items and commitments from the transcript (for every participant, not only {{user_name}}), following the format below.
 
-{{task_context}}
-
-{{task_format_spec}}
+{{action_items_block}}
 
 ## 3. Detailed Topics
 ### Topic 1: [Name]
 - Discussion points
 - Decisions made
-- Action items and owners
 
 ### Topic 2: [Name]
 - (repeat as needed)
@@ -40,6 +35,7 @@ RULES:
 - Do NOT invent. If something is missing, write literally "Not mentioned".
 - Identify participants from the transcript; otherwise "Not mentioned".
 - Professional, clear, objective tone. Use bullets and bold headers.
+- Section 2 (Action Items) is the SINGLE source of truth for tasks. Do NOT list action items, owners, or task assignments inside the Detailed Topics — those topics describe discussion context and decisions only.
 
 ---
 
@@ -61,17 +57,13 @@ Transforme a transcrição abaixo em notas de reunião, seguindo este formato ex
 - Visão concisa do propósito, principais tópicos e outcomes.
 
 ## 2. Itens de Ação
-Extraia TODOS os itens de ação e compromissos da transcrição (para cada participante, não apenas {{user_name}}), seguindo o formato abaixo.
 
-{{task_context}}
-
-{{task_format_spec}}
+{{action_items_block}}
 
 ## 3. Tópicos Detalhados
 ### Tópico 1: [Nome]
 - Pontos discutidos
 - Decisões tomadas
-- Itens de ação e responsáveis
 
 ### Tópico 2: [Nome]
 - (repita conforme necessário)
@@ -80,6 +72,7 @@ REGRAS:
 - NÃO invente. Se algo estiver ausente, escreva literalmente "Não mencionado".
 - Identifique participantes a partir da transcrição; caso contrário, "Não mencionado".
 - Tom profissional, claro e objetivo. Use bullets e negrito em cabeçalhos.
+- A Seção 2 (Itens de Ação) é a ÚNICA fonte de verdade para tarefas. NÃO liste itens de ação, responsáveis ou atribuições dentro dos Tópicos Detalhados — esses tópicos descrevem apenas o contexto da discussão e as decisões.
 
 ---
 
@@ -435,5 +428,3 @@ export function findArtifactById(id: string): LocalizedArtifact | undefined {
   return LOCALIZED_ARTIFACTS.find((a) => a.id === id);
 }
 
-// Re-export for consumers that used to import from prompts.ts.
-export { TASK_FORMAT_SPEC };

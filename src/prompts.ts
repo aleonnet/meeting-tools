@@ -1,23 +1,10 @@
-// Shared task format used by Summary section 2 and Extract Tasks command.
-// Single source of truth for the checkbox format consumed by task-parser.ts
-// (meeting-tasks / meeting-kanban / meeting-gantt dashboards).
-//
-// Meeting wikilinks and the project tag are provided in a dynamic "Context"
-// preamble that the callers prepend (see buildTaskContextPreamble in
-// task-context.ts). The spec below references that Context.
-export const TASK_FORMAT_SPEC = `Format each action item EXACTLY like this (one per line):
-
-- [ ] [clear, objective description] [resource:: [owner name]] [priority:: [high/medium/low]] #task <project tag from Context> <meeting wikilinks from Context> 📅 [YYYY-MM-DD]
-
-Rules:
-- Include only tasks with an explicit owner named in the text (third-person reference, e.g. "Roger will send...", "Patrícia will write..."). If a statement uses collective forms ("we", "a gente", "let's") or has no clearly identified owner, OMIT the task.
-- Do NOT attribute ambiguous or collective statements to the User name from Context. The User name is informational only.
-- If an explicit deadline is present, use 📅 YYYY-MM-DD. If not, omit 📅.
-- priority: "high" for urgent/critical, "medium" for normal, "low" for nice-to-have. If unclear, use "medium".
-- Apply the "Meeting wikilinks" from Context to EVERY task, exactly as written (including document extensions like .pptx).
-- If "Project tag" is present in Context, apply it to EVERY task. If not present, omit the #projects/ tag.
-- Do not invent information not in the text.
-- If no action item qualifies under the rules above (everything is collective or lacks a named owner), output exactly "_(no action items identified)_" instead of any bullet list. Translate the marker into the output language when appropriate.`;
+// Task extraction (formerly TASK_FORMAT_SPEC + EXTRACT_TASKS_PROMPT) was
+// rewritten as structured output (json_schema + citation validation) — see
+// task-extractor.ts. The free-text spec was removed because (a) gpt-4.1
+// followed it conservatively to the point of returning zero tasks, (b)
+// gpt-5.4 followed it loosely enough to attribute actions to whisper
+// artifacts ("Dinheiro" as owner). Schema + deterministic substring check
+// replaced both behaviors.
 
 // Summary Template default content lives in src/vault-templates.ts
 // (LOCALIZED_ARTIFACTS entry id "summary-template") with both EN and PT-BR
@@ -25,7 +12,9 @@ Rules:
 //   {{language_instruction}} — injected from settings.outputLanguage
 //   {{user_name}}           — from settings.userName
 //   {{task_context}}        — Context preamble (user name, wikilinks, project tag)
-//   {{task_format_spec}}    — shared TASK_FORMAT_SPEC above
+//   {{action_items_block}}  — preserved literal in the model output, replaced
+//                              after the call with deterministically-rendered
+//                              tasks from task-extractor.ts
 //   {{transcript}}          — the transcript text
 
 export const MINDMAP_PROMPT = `
@@ -54,18 +43,6 @@ mindmap
     Risks
       Missing invoices
 \`\`\``.trim();
-
-export const EXTRACT_TASKS_PROMPT = `
-Extract ALL action items / commitments from the text below.
-
-{{task_context}}
-
-${TASK_FORMAT_SPEC}
-
-Additional rules:
-- DO NOT repeat the entire text, only the extracted tasks.
-- If no action items exist, respond exactly: "No action items identified."
-`.trim();
 
 export const NEW_PROJECT_PROMPT = `
 You are an executive assistant specialized in project structuring.

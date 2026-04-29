@@ -36,7 +36,14 @@ export const PT_BR: Strings = {
   noticeChunkFailed: (i) => `Chunk ${i} falhou — continuando.`,
   noticeTranscribeFailed: (msg) => `Falha ao gerar transcrição: ${msg}`,
   noticeFileExceedsLimit: (mb) =>
-    `Arquivo excede 25MB (${mb}MB). Ative chunking (modo auto).`,
+    `Arquivo excede 25MB (${mb}MB). Reduza Duração do chunk em Settings.`,
+  noticeChunkDurationOutOfRange: (min, max, applied) =>
+    `Duração do chunk fora do intervalo ${min}-${max} min. Ajustado para ${applied}.`,
+  noticeSilenceSettingOutOfRange: (min, max, applied) =>
+    `Valor fora do intervalo ${min}-${max}. Ajustado para ${applied}.`,
+  noticeRemovingSilences: "Removendo silêncios…",
+  noticeSilenceRemoved: (origSec, compactSec) =>
+    `Silêncios removidos: ${origSec.toFixed(0)}s → ${compactSec.toFixed(0)}s.`,
   noticeSrtSaved: (path) => `SRT salvo: ${path}`,
   noticeMdSaved: (path) => `MD salvo: ${path}`,
   transcriptMdHeader: "# Transcrição",
@@ -56,6 +63,8 @@ export const PT_BR: Strings = {
   noticeExtractTasksFailed: "Falha ao extrair tasks.",
   noticeNoTasksFound: "Nenhum item de ação identificado no texto.",
   noticeTasksInserted: "Tasks inseridas.",
+  noticeTasksRejected: (count) =>
+    `${count} task(s) rejeitada(s) por validação de citação (owner ou trecho não encontrado na transcrição).`,
 
   noticeOperationCancelled: "Operação cancelada.",
   noticeDesktopOnlyExtract: "Extração de PDF/PPTX requer desktop. Use um arquivo TXT.",
@@ -135,9 +144,19 @@ export const PT_BR: Strings = {
 
   settingTranscriptionModelName: "Modelo de transcrição",
   settingTranscriptionModelDesc:
-    "Auto escolhe entre diarize (com falantes, ≤ 23min) e whisper-1 (áudios longos).",
+    "whisper-1: rápido e barato, sem falantes. gpt-4o-transcribe-diarize: identifica falantes (Speaker 1/2/…).",
   settingChunkDurationName: "Duração do chunk (min)",
-  settingChunkDurationDesc: "Tamanho dos chunks em áudios longos. Típico: 5-20.",
+  settingChunkDurationDesc:
+    "Tamanho do chunk para áudios > 25 MB ou (whisper) áudios mais longos que isso. Default 30 min, intervalo 1-120.",
+  settingRemoveSilenceName: "Remover silêncios",
+  settingRemoveSilenceDesc:
+    "Detecta e remove trechos silenciosos antes de enviar. Reduz alucinação no whisper-1 e custo no diarize. Requer decodificar o áudio (sem bypass).",
+  settingMinSilenceSecName: "Silêncio mínimo (s)",
+  settingMinSilenceSecDesc:
+    "Duração mínima de silêncio para ser cortado. Default 2 s, intervalo 0.5-30.",
+  settingSilenceThresholdDbName: "Limiar de silêncio (dB)",
+  settingSilenceThresholdDbDesc:
+    "Nível de energia abaixo do qual o áudio é considerado silêncio. Default -50 dB, intervalo -80 a -20 (mais negativo = mais permissivo).",
 
   settingSummaryModelName: "Modelo de resumo",
   settingSummaryModelDesc: "Modelo usado para resumos e criação de projetos.",
